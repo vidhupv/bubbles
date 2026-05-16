@@ -28,3 +28,7 @@ target-version = "py311"
 
 [tool.ruff.lint]
 select = ["E", "F", "W", "I", "B", "UP"]
+# B008: FastAPI uses File()/Form()/Depends() as parameter markers — not a real
+# call-at-default-time. The pattern is idiomatic; the rule is a false positive
+# for FastAPI route handlers.
+ignore = ["B008"]
