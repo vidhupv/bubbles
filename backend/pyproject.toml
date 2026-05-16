@@ -12,6 +12,7 @@ dependencies = [
     "soundfile>=0.12.1",
     "pydantic>=2.9.0",
     "setuptools>=75.0,<80",
+    "claude-agent-sdk>=0.0.20",
 ]
 
 [dependency-groups]

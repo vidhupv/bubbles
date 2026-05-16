@@ -5,19 +5,21 @@ Run with:
 
 Endpoints:
     GET  /health
-    POST /pitch     hum audio → MIDI notes + BPM + key
-    POST /arrange   MIDI + intent → Arrangement (Claude Agent SDK, TODO)
+    POST /pitch      hum audio → MIDI notes + BPM + key
+    POST /arrange    MIDI + intent → Arrangement (Claude Agent SDK)
 """
 
 from __future__ import annotations
 
 import logging
 
-from fastapi import FastAPI, File, HTTPException, UploadFile
+from fastapi import FastAPI, File, Form, HTTPException, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
+from pydantic import BaseModel
 
+from app.arrange import arrange_async
 from app.pitch import detect_pitch_from_bytes
-from app.schemas import PitchResult
+from app.schemas import Arrangement, Note, PitchResult
 
 logging.basicConfig(
     level=logging.INFO,
@@ -27,7 +29,7 @@ log = logging.getLogger("bubbles")
 
 app = FastAPI(title="Bubbles", version="0.1.0")
 
-# Local-only: Vite runs on :3000, backend on :5001. Tighten if we ever deploy.
+# Local-only: Vite on :3000, backend on :5001. Tighten if we ever deploy.
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["http://localhost:3000", "http://127.0.0.1:3000"],
@@ -36,7 +38,6 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# 30 seconds at 48 kHz, 16-bit mono ≈ 2.9 MB. Generous upper bound.
 _MAX_AUDIO_BYTES = 20 * 1024 * 1024  # 20 MB
 
 
@@ -61,8 +62,6 @@ async def pitch_endpoint(audio: UploadFile = File(...)) -> PitchResult:
             detail=f"Audio file too large (>{_MAX_AUDIO_BYTES // 1024 // 1024} MB).",
         )
 
-    # basic-pitch reads by file path and detects format by extension. Pass
-    # through whatever the browser sent (webm, mp4, wav).
     suffix = ".wav"
     if audio.filename and "." in audio.filename:
         suffix = "." + audio.filename.rsplit(".", 1)[-1].lower()
@@ -77,10 +76,62 @@ async def pitch_endpoint(audio: UploadFile = File(...)) -> PitchResult:
         ) from exc
 
     if not result.notes:
-        # Not a 500 — the hum was silent or atonal. Let the client show a toast.
         raise HTTPException(
             status_code=422,
             detail="No clear melody detected. Try humming a steady pitch.",
         )
 
     return result
+
+
+class ArrangeRequest(BaseModel):
+    notes: list[Note]
+    intent: str | None = None
+    prior: Arrangement | None = None
+
+
+@app.post("/arrange", response_model=Arrangement)
+async def arrange_endpoint(req: ArrangeRequest) -> Arrangement:
+    """Build (or refine) an Arrangement from the hummed notes + voice intent.
+
+    First call: pass `notes` and optional `intent` (a free-form text like
+    "make it sadder"); leave `prior` null.
+    Refinement: pass the previous Arrangement as `prior` and the new intent.
+    """
+    if not req.notes:
+        raise HTTPException(
+            status_code=400, detail="At least one hummed note is required."
+        )
+    try:
+        return await arrange_async(req.notes, req.intent, req.prior)
+    except Exception as exc:
+        log.exception("Arrangement failed")
+        raise HTTPException(
+            status_code=500,
+            detail=f"Arrangement failed: {exc.__class__.__name__}",
+        ) from exc
+
+
+# Convenience: combined hum → arrangement in one round-trip. Used by the
+# "press hum" path on the frontend so it only makes one network call.
+@app.post("/arrange-from-hum", response_model=Arrangement)
+async def arrange_from_hum(
+    audio: UploadFile = File(...),
+    intent: str = Form(""),
+) -> Arrangement:
+    audio_bytes = await audio.read()
+    if not audio_bytes:
+        raise HTTPException(status_code=400, detail="Empty audio upload.")
+
+    suffix = ".wav"
+    if audio.filename and "." in audio.filename:
+        suffix = "." + audio.filename.rsplit(".", 1)[-1].lower()
+
+    pitch = detect_pitch_from_bytes(audio_bytes, suffix=suffix)
+    if not pitch.notes:
+        raise HTTPException(
+            status_code=422,
+            detail="No clear melody detected. Try humming a steady pitch.",
+        )
+
+    return await arrange_async(pitch.notes, intent or None, prior=None)

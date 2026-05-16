@@ -1,101 +1,320 @@
-/* Day 1 minimal styling. Real warm-dark-mode + Fraunces + JetBrains Mono
-   tokens land on Day 11 per the design review. */
+@import "./tokens.css";
 
-:root {
-  color-scheme: dark;
-  --bg: #0f0e0d;
-  --fg: #f4f0ea;
-  --accent: #d4892f;
-  --muted: rgba(244, 240, 234, 0.55);
+/* ============================================================ */
+/* Layout                                                       */
+/* ============================================================ */
+
+.stage {
+  flex: 1;
+  display: grid;
+  grid-template-rows: 1fr auto auto auto 1fr;
+  align-items: center;
+  justify-items: center;
+  padding: var(--space-12) var(--space-8);
+  position: relative;
+  gap: var(--space-6);
+  text-align: center;
 }
 
-* {
-  box-sizing: border-box;
+.stage.has-arrangement {
+  /* hum button shrinks a touch once a song exists */
+  --hum-scale: 0.78;
 }
 
-html,
-body {
-  margin: 0;
-  padding: 0;
-  background: var(--bg);
-  color: var(--fg);
-  font-family: ui-sans-serif, system-ui, sans-serif;
-}
+/* ============================================================ */
+/* Hum button — the hero                                        */
+/* ============================================================ */
 
-.day1 {
-  max-width: 720px;
-  margin: 4rem auto;
-  padding: 0 2rem;
-}
-
-.day1 h1 {
-  font-size: 3rem;
-  font-weight: 400;
-  margin: 0 0 0.25rem;
-}
-
-.subtitle {
-  color: var(--muted);
-  margin: 0 0 1.5rem;
-}
-
-.note {
-  font-size: 0.9rem;
-  color: var(--muted);
-  border-left: 2px solid var(--accent);
-  padding-left: 0.75rem;
-  margin: 1rem 0 2rem;
-}
-
-input[type="file"] {
-  color: var(--fg);
-  padding: 0.5rem 0;
-}
-
-button.play {
-  font-family: ui-monospace, SFMono-Regular, monospace;
-  font-size: 1rem;
+.hum-button {
+  display: grid;
+  place-items: center;
   background: transparent;
-  color: var(--accent);
-  border: 1px solid var(--accent);
-  padding: 0.75rem 1.5rem;
-  border-radius: 3px;
+  border: none;
   cursor: pointer;
-  letter-spacing: 0.04em;
-  transition: background 120ms ease, color 120ms ease;
+  user-select: none;
+  -webkit-user-select: none;
+  touch-action: none;
 }
 
-button.play:hover {
-  background: var(--accent);
-  color: var(--bg);
+.hum-button:focus-visible .blob {
+  box-shadow: 0 0 0 3px var(--accent);
 }
 
-h3 {
-  font-weight: 400;
-  color: var(--muted);
-  font-size: 0.85rem;
-  text-transform: uppercase;
-  letter-spacing: 0.08em;
+.blob {
+  --hum-scale: 1;
+  position: relative;
+  display: grid;
+  place-items: center;
+  border-radius: 50%;
+  border: 1px solid var(--accent);
+  background: radial-gradient(
+    circle at 50% 45%,
+    var(--accent-soft) 0%,
+    transparent 65%
+  );
+  box-shadow:
+    inset 0 0 30px var(--accent-soft),
+    0 0 60px rgba(212, 137, 47, 0.12);
+  transition: transform 80ms var(--ease-out), opacity 160ms ease;
 }
 
-.error {
-  color: #ff8a7a;
+.blob--idle {
+  animation: breathe 3.4s var(--ease-out) infinite;
 }
 
-.result {
-  margin-top: 2rem;
-  padding: 1.25rem;
-  background: #1a1817;
-  border-radius: 6px;
+@keyframes breathe {
+  0%, 100% {
+    transform: scale(0.96);
+  }
+  50% {
+    transform: scale(1.02);
+  }
 }
 
-.result h2 {
-  margin: 0 0 0.25rem;
+.blob--recording {
+  border-color: var(--accent);
+  background: radial-gradient(
+    circle at 50% 45%,
+    rgba(212, 137, 47, 0.3) 0%,
+    transparent 70%
+  );
+  animation: none;
+}
+
+.blob--processing {
+  animation: shimmer 1.4s ease-in-out infinite;
+}
+
+@keyframes shimmer {
+  0% {
+    filter: hue-rotate(0deg) brightness(0.92);
+  }
+  50% {
+    filter: hue-rotate(-12deg) brightness(1.08);
+  }
+  100% {
+    filter: hue-rotate(0deg) brightness(0.92);
+  }
+}
+
+.blob--playing {
+  animation: none;
+}
+
+.blob--denied {
+  border-color: var(--danger);
+  background: radial-gradient(
+    circle at 50% 45%,
+    rgba(200, 85, 61, 0.18) 0%,
+    transparent 65%
+  );
+  animation: none;
+}
+
+.blob-x {
+  width: 30%;
+  height: 30%;
+  stroke: var(--danger);
+  stroke-width: 6;
+  fill: none;
+  stroke-linecap: round;
+}
+
+/* ============================================================ */
+/* Microcopy                                                    */
+/* ============================================================ */
+
+.microcopy {
+  font-family: var(--font-display);
+  font-style: italic;
+  font-size: 1.25rem;
+  font-weight: 300;
+  color: var(--fg-muted);
+  letter-spacing: 0.01em;
+  margin: 0;
+  min-height: 1.6em;
+}
+
+.microcopy.error {
+  color: var(--danger);
+  font-style: normal;
+}
+
+/* ============================================================ */
+/* Rationale chat bubble                                        */
+/* ============================================================ */
+
+.rationale {
+  font-family: var(--font-mono);
+  font-size: 1rem;
+  line-height: 1.55;
+  color: var(--fg);
+  max-width: 640px;
+  padding: var(--space-4) var(--space-6);
+  background: var(--bg-elevated);
+  border-radius: 4px;
+  border-left: 2px solid var(--accent);
+  letter-spacing: -0.005em;
+}
+
+.cursor {
+  display: inline-block;
+  margin-left: 2px;
+  color: var(--accent);
+  animation: blink 1.05s steps(1) infinite;
+}
+
+@keyframes blink {
+  50% {
+    opacity: 0;
+  }
+}
+
+/* ============================================================ */
+/* Vibe presets                                                 */
+/* ============================================================ */
+
+.vibe-presets {
+  display: flex;
+  gap: var(--space-8);
+  font-family: var(--font-display);
+  font-style: italic;
+  font-size: 1.4rem;
+  font-weight: 300;
+}
+
+button.vibe {
+  text-decoration: underline;
+  text-underline-offset: 4px;
+  text-decoration-thickness: 1px;
+  text-decoration-color: var(--fg-dim);
+  color: var(--fg-muted);
+  transition: color 120ms ease, text-decoration-color 120ms ease;
+  padding: var(--space-2) var(--space-1);
+}
+
+button.vibe:hover:not(:disabled) {
+  color: var(--accent);
+  text-decoration-color: var(--accent);
+}
+
+button.vibe:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+
+/* ============================================================ */
+/* Voice mic                                                    */
+/* ============================================================ */
+
+button.voice-mic {
+  width: 32px;
+  height: 32px;
+  display: grid;
+  place-items: center;
+  color: var(--fg-muted);
+  transition: color 120ms ease, transform 120ms ease;
+}
+
+button.voice-mic:hover:not(:disabled) {
   color: var(--accent);
 }
 
-.result ul {
-  font-family: ui-monospace, SFMono-Regular, monospace;
-  font-size: 0.85rem;
-  padding-left: 1.25rem;
+button.voice-mic--on {
+  color: var(--accent);
+  transform: scale(1.1);
+}
+
+button.voice-mic svg {
+  width: 20px;
+  height: 20px;
+  stroke: currentColor;
+  stroke-width: 1.5;
+  fill: none;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+button.voice-mic rect {
+  fill: currentColor;
+  stroke: none;
+}
+
+/* ============================================================ */
+/* Export link (bottom-right corner)                            */
+/* ============================================================ */
+
+button.export-link {
+  position: fixed;
+  right: var(--space-8);
+  bottom: var(--space-8);
+  font-family: var(--font-display);
+  font-style: italic;
+  font-size: 0.95rem;
+  color: var(--accent);
+  letter-spacing: 0.01em;
+  text-decoration: underline;
+  text-underline-offset: 4px;
+  text-decoration-thickness: 1px;
+  padding: var(--space-2) var(--space-3);
+}
+
+button.export-link:hover:not(:disabled) {
+  text-decoration-color: var(--accent);
+  opacity: 0.85;
+}
+
+button.export-link:disabled {
+  cursor: wait;
+  opacity: 0.6;
+}
+
+/* ============================================================ */
+/* Mobile fallback (≤768px)                                     */
+/* ============================================================ */
+
+.mobile-fallback {
+  flex: 1;
+  display: grid;
+  place-items: center;
+  text-align: center;
+  padding: var(--space-12);
+  gap: var(--space-3);
+  align-content: center;
+}
+
+.mobile-fallback h1 {
+  font-family: var(--font-display);
+  font-weight: 300;
+  font-size: 3.5rem;
+  margin: 0 0 var(--space-6);
+  letter-spacing: -0.02em;
+}
+
+.mobile-fallback p {
+  font-style: italic;
+  font-size: 1.1rem;
+  color: var(--fg);
+  margin: 0;
+}
+
+.mobile-fallback .muted {
+  color: var(--fg-muted);
+  font-size: 0.95rem;
+  margin-top: var(--space-2);
+}
+
+/* ============================================================ */
+/* Brand mark (top-left, subtle)                                */
+/* ============================================================ */
+
+.brand {
+  position: fixed;
+  left: var(--space-8);
+  top: var(--space-8);
+  font-family: var(--font-display);
+  font-weight: 300;
+  font-size: 1.1rem;
+  letter-spacing: 0.02em;
+  color: var(--fg-muted);
 }
