@@ -5,11 +5,8 @@
  * of the app can trust their shape.
  */
 
-import type { Arrangement, PitchResult } from "@shared/types";
-import {
-  ArrangementSchema,
-  PitchResultSchema,
-} from "./audio/validate";
+import type { Arrangement, Note } from "@shared/types";
+import { ArrangementSchema, PitchResultSchema } from "./audio/validate";
 
 export class ApiError extends Error {
   constructor(public readonly status: number, message: string) {
@@ -24,13 +21,13 @@ async function readError(r: Response): Promise<never> {
     const body = await r.json();
     if (typeof body?.detail === "string") detail = body.detail;
   } catch {
-    /* response wasn't JSON; keep statusText */
+    /* response wasn't JSON */
   }
   throw new ApiError(r.status, detail);
 }
 
 /** POST /pitch — upload a hum, get MIDI back. */
-export async function detectPitch(audio: Blob): Promise<PitchResult> {
+export async function detectPitch(audio: Blob) {
   const form = new FormData();
   form.append("audio", audio, "hum.webm");
   const r = await fetch("/api/pitch", { method: "POST", body: form });
@@ -38,29 +35,26 @@ export async function detectPitch(audio: Blob): Promise<PitchResult> {
   return PitchResultSchema.parse(await r.json());
 }
 
-/** POST /arrange-from-hum — combined hum→arrangement in one round-trip. */
-export async function arrangeFromHum(
-  audio: Blob,
-  intent?: string,
-): Promise<Arrangement> {
+/** POST /arrange-from-hum — pitch + melody-only Arrangement in one round-trip. */
+export async function arrangeFromHum(audio: Blob): Promise<Arrangement> {
   const form = new FormData();
   form.append("audio", audio, "hum.webm");
-  if (intent) form.append("intent", intent);
   const r = await fetch("/api/arrange-from-hum", { method: "POST", body: form });
   if (!r.ok) await readError(r);
   return ArrangementSchema.parse(await r.json());
 }
 
-/** POST /arrange — refine an existing arrangement using a voice intent. */
-export async function refineArrangement(
-  prior: Arrangement,
-  intent: string,
-  notes: Arrangement extends never ? never : PitchResult["notes"],
-): Promise<Arrangement> {
+/** POST /arrange — refine an Arrangement using a free-form intent (Claude call). */
+export async function refineArrangement(args: {
+  notes: Note[];
+  intent: string;
+  prior: Arrangement | null;
+  bpm_hint?: number | null;
+}): Promise<Arrangement> {
   const r = await fetch("/api/arrange", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ notes, intent, prior }),
+    body: JSON.stringify(args),
   });
   if (!r.ok) await readError(r);
   return ArrangementSchema.parse(await r.json());

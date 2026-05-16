@@ -1,14 +1,13 @@
 /**
- * Bubbles main app — the full hum-driven AI-bandmate loop.
+ * Bubbles main app.
  *
- * Flow:
- *   1. user presses + holds the big hum button (mic permission requested on
- *      first press)
- *   2. release → audio blob → POST /arrange-from-hum (basic-pitch + Claude)
- *   3. while waiting, the blob shimmers and rationale streams in
- *   4. arrangement renders on Tone.js with the hummed melody as guitar lead
- *   5. refine by speaking (Web Speech) or tapping sadder/heavier/simpler
- *   6. corner "export.wav" link runs an offline render to download a WAV
+ * Flow ("start basic, complicate it"):
+ *   1. Press + hold blob → hum → release.
+ *   2. Backend pitch-detects and returns a melody-only Arrangement.
+ *   3. Frontend plays your hum back on guitar — exactly the notes you sang.
+ *   4. + chords / + drums buttons add layers via Claude.
+ *   5. Voice mic / sadder-heavier-simpler refine whatever exists.
+ *   6. Bottom-right export.wav downloads a 60s WAV.
  */
 import { useCallback, useEffect, useRef, useState } from "react";
 import type { Arrangement } from "@shared/types";
@@ -17,7 +16,9 @@ import { play, type PlaybackHandle } from "./audio/renderer";
 import { loadInstruments, unlockAudio, type Instruments } from "./audio/sampler";
 import { ExportLink } from "./components/ExportLink";
 import { HumButton, type HumButtonState } from "./components/HumButton";
+import { LayerControls } from "./components/LayerControls";
 import { MobileFallback } from "./components/MobileFallback";
+import { NotesDebug } from "./components/NotesDebug";
 import { RationaleChat } from "./components/RationaleChat";
 import { VibePresets } from "./components/VibePresets";
 import { VoiceMic } from "./components/VoiceMic";
@@ -25,13 +26,20 @@ import { useHumRecorder } from "./hooks/useHumRecorder";
 import { useVoiceCommand } from "./hooks/useVoiceCommand";
 
 const MIN_HUM_MS = 1500;
-const TOO_SHORT_MSG = "Hum a bit longer — I need ~3 seconds to work with.";
+const TOO_SHORT_MSG = "Hum a bit longer — at least 1.5 seconds.";
 const IDLE_COPY = "Press and hold. Hum any melody.";
 const REC_COPY = "Listening…";
-const PROC_COPY = "Bubbles is thinking.";
+const PROC_COPY_INITIAL = "Hearing your hum.";
+const PROC_COPY_REFINE = "Bubbles is thinking.";
 const DENIED_COPY = "Mic blocked — click to retry.";
 
-type Phase = "idle" | "recording" | "processing" | "playing" | "error" | "denied";
+type Phase =
+  | "idle"
+  | "recording"
+  | "processing-initial" // pitch detection on first hum
+  | "processing-refine" // Claude refining
+  | "playing"
+  | "denied";
 
 export function App() {
   const [phase, setPhase] = useState<Phase>("idle");
@@ -41,12 +49,10 @@ export function App() {
 
   const recorder = useHumRecorder();
   const voice = useVoiceCommand();
-  const lastHumRef = useRef<Blob | null>(null);
-  const pressStartRef = useRef<number>(0);
   const instrumentsRef = useRef<Instruments | null>(null);
   const playbackRef = useRef<PlaybackHandle | null>(null);
+  const pressStartRef = useRef<number>(0);
 
-  // Detect ≤768px once on mount; design review locked desktop-only MVP.
   useEffect(() => {
     const mq = window.matchMedia("(max-width: 768px)");
     const update = () => setIsMobile(mq.matches);
@@ -55,7 +61,6 @@ export function App() {
     return () => mq.removeEventListener("change", update);
   }, []);
 
-  // Tear down audio on unmount.
   useEffect(() => {
     return () => {
       playbackRef.current?.stop();
@@ -63,7 +68,6 @@ export function App() {
     };
   }, []);
 
-  // Mirror recorder permission state into our phase.
   useEffect(() => {
     if (recorder.state === "denied") setPhase("denied");
   }, [recorder.state]);
@@ -78,14 +82,14 @@ export function App() {
   }, []);
 
   const handlePressDown = useCallback(async () => {
-    if (phase === "processing") return;
+    if (phase === "processing-initial" || phase === "processing-refine") return;
     setErrorMsg(null);
     pressStartRef.current = Date.now();
     try {
       await recorder.start();
       setPhase("recording");
     } catch {
-      // recorder hook handles its own error state; mirror via effect above.
+      /* state mirrored via effect */
     }
   }, [phase, recorder]);
 
@@ -100,9 +104,7 @@ export function App() {
       return;
     }
 
-    lastHumRef.current = blob;
-    setPhase("processing");
-
+    setPhase("processing-initial");
     try {
       const arr = await arrangeFromHum(blob);
       setArrangement(arr);
@@ -114,28 +116,18 @@ export function App() {
     }
   }, [phase, recorder, renderArrangement]);
 
-  const handleRefine = useCallback(
+  const refine = useCallback(
     async (intent: string) => {
-      if (!arrangement || !lastHumRef.current) return;
+      if (!arrangement) return;
       setErrorMsg(null);
-      setPhase("processing");
+      setPhase("processing-refine");
       try {
-        // Re-pitch the last hum so the backend has notes to feed Claude with.
-        const form = new FormData();
-        form.append("audio", lastHumRef.current, "hum.webm");
-        form.append("intent", intent);
-        const r = await fetch("/api/arrange-from-hum", {
-          method: "POST",
-          body: form,
+        const next = await refineArrangement({
+          notes: arrangement.melody,
+          intent,
+          prior: arrangement,
+          bpm_hint: arrangement.tempo,
         });
-        if (!r.ok) {
-          const body = await r.json().catch(() => ({ detail: r.statusText }));
-          throw new ApiError(r.status, body.detail ?? r.statusText);
-        }
-        const next = (await r.json()) as Arrangement;
-        // We aren't using refineArrangement() here because we need to re-run
-        // basic-pitch anyway (server is stateless across calls). Same effect.
-        void refineArrangement;
         setArrangement(next);
         await renderArrangement(next);
         setPhase("playing");
@@ -148,7 +140,7 @@ export function App() {
   );
 
   const handleVoicePressDown = useCallback(() => {
-    if (!voice.supported || phase === "processing") return;
+    if (!voice.supported || phase.startsWith("processing")) return;
     voice.start();
   }, [voice, phase]);
 
@@ -156,9 +148,9 @@ export function App() {
     if (!voice.supported) return;
     const transcript = await voice.stop();
     if (transcript.trim().length > 0) {
-      await handleRefine(transcript);
+      await refine(transcript);
     }
-  }, [voice, handleRefine]);
+  }, [voice, refine]);
 
   if (isMobile) return <MobileFallback />;
 
@@ -167,7 +159,7 @@ export function App() {
       ? "denied"
       : phase === "recording"
         ? "recording"
-        : phase === "processing"
+        : phase === "processing-initial" || phase === "processing-refine"
           ? "processing"
           : phase === "playing"
             ? "playing"
@@ -178,13 +170,18 @@ export function App() {
       ? errorMsg
       : phase === "recording"
         ? REC_COPY
-        : phase === "processing"
-          ? PROC_COPY
-          : phase === "denied"
-            ? DENIED_COPY
-            : IDLE_COPY;
+        : phase === "processing-initial"
+          ? PROC_COPY_INITIAL
+          : phase === "processing-refine"
+            ? PROC_COPY_REFINE
+            : phase === "denied"
+              ? DENIED_COPY
+              : IDLE_COPY;
 
   const hasArrangement = arrangement !== null;
+  const hasChords = (arrangement?.chord_progression.length ?? 0) > 0;
+  const hasDrums = arrangement?.drums !== null && arrangement?.drums !== undefined;
+  const processing = phase === "processing-initial" || phase === "processing-refine";
 
   return (
     <>
@@ -207,17 +204,19 @@ export function App() {
         )}
 
         {hasArrangement && (
-          <div
-            style={{ display: "flex", flexDirection: "column", alignItems: "center", gap: "var(--space-6)" }}
-          >
-            <VibePresets
-              disabled={phase === "processing"}
-              onPick={handleRefine}
+          <div className="controls">
+            <LayerControls
+              hasChords={hasChords}
+              hasDrums={hasDrums}
+              disabled={processing}
+              onAddChords={() => refine(hasChords ? "regenerate the chords" : "add chords")}
+              onAddDrums={() => refine(hasDrums ? "regenerate the drums" : "add drums")}
             />
+            <VibePresets disabled={processing} onPick={refine} />
             <VoiceMic
               listening={voice.listening}
               supported={voice.supported}
-              disabled={phase === "processing"}
+              disabled={processing}
               onPressDown={handleVoicePressDown}
               onPressUp={handleVoicePressUp}
             />
@@ -226,6 +225,11 @@ export function App() {
                 {voice.transcript || "Listening for your refinement…"}
               </span>
             )}
+            <NotesDebug
+              notes={arrangement!.melody}
+              tempo={arrangement!.tempo}
+              keyLabel={`${arrangement!.key.tonic} ${arrangement!.key.mode}`}
+            />
           </div>
         )}
       </main>

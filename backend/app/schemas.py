@@ -61,19 +61,33 @@ class Drums(BaseModel):
 
 
 class Arrangement(BaseModel):
-    """Full musical arrangement returned by Claude.
+    """Musical arrangement built from the user's hum.
 
-    Played back as: hummed melody as the guitar's lead line, with
-    chord_progression underneath, and drums keeping time.
+    `melody` is the source-of-truth lead line — pitch-detected from the hum,
+    never invented by the agent. The agent picks tempo, key, and OPTIONAL
+    chord_progression / drums layers when the user asks for them.
+
+    First playback after a hum: melody only. The user opts into chords + drums
+    via explicit intents.
     """
 
     tempo: int = Field(..., ge=60, le=180)
     key: Key
-    chord_progression: list[str] = Field(
-        ..., min_length=4, max_length=4, description="Exactly 4 chords, looped."
+    melody: list[Note] = Field(
+        ..., description="Pitch-detected notes from the user's hum. Required."
     )
-    guitar: Guitar
-    drums: Drums
+    chord_progression: list[str] = Field(
+        default_factory=list,
+        description="Exactly 4 chord symbols when present; empty when the user hasn't asked for chords.",
+    )
+    guitar: Guitar | None = Field(
+        default=None,
+        description="Guitar accompaniment voicing/rhythm. Null when chord_progression is empty.",
+    )
+    drums: Drums | None = Field(
+        default=None,
+        description="Drums layer. Null when the user hasn't asked for drums.",
+    )
     rationale: str = Field(..., description="1-3 sentences explaining the musical choice.")
 
 

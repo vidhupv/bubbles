@@ -171,6 +171,53 @@
 }
 
 /* ============================================================ */
+/* Controls wrapper                                             */
+/* ============================================================ */
+
+.controls {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: var(--space-6);
+}
+
+/* ============================================================ */
+/* Layer controls (+ chords / + drums)                          */
+/* ============================================================ */
+
+.layer-controls {
+  display: flex;
+  gap: var(--space-6);
+}
+
+button.layer {
+  font-family: var(--font-mono);
+  font-size: 0.95rem;
+  color: var(--fg-muted);
+  border: 1px solid rgba(244, 240, 234, 0.18);
+  padding: var(--space-2) var(--space-4);
+  border-radius: 2px;
+  letter-spacing: 0.02em;
+  transition: color 120ms ease, border-color 120ms ease, background 120ms ease;
+}
+
+button.layer:hover:not(:disabled) {
+  color: var(--accent);
+  border-color: var(--accent);
+}
+
+button.layer.layer--on {
+  color: var(--accent);
+  border-color: var(--accent-soft);
+  background: rgba(212, 137, 47, 0.06);
+}
+
+button.layer:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+
+/* ============================================================ */
 /* Vibe presets                                                 */
 /* ============================================================ */
 
@@ -267,6 +314,55 @@ button.export-link:hover:not(:disabled) {
 button.export-link:disabled {
   cursor: wait;
   opacity: 0.6;
+}
+
+/* ============================================================ */
+/* Notes debug panel                                            */
+/* ============================================================ */
+
+.notes-debug {
+  font-family: var(--font-mono);
+  font-size: 0.78rem;
+  color: var(--fg-dim);
+  max-width: 540px;
+  text-align: left;
+}
+
+button.notes-debug__toggle {
+  color: var(--fg-dim);
+  letter-spacing: 0.04em;
+  padding: var(--space-1) var(--space-2);
+}
+
+button.notes-debug__toggle:hover {
+  color: var(--fg-muted);
+}
+
+.notes-debug__list {
+  list-style: none;
+  padding: var(--space-2) 0 0;
+  margin: 0;
+  max-height: 220px;
+  overflow-y: auto;
+  display: grid;
+  grid-template-columns: 1fr 1fr 1fr;
+  gap: 2px var(--space-3);
+}
+
+.notes-debug__list li {
+  display: contents;
+}
+
+.notes-debug__time,
+.notes-debug__name,
+.notes-debug__dur {
+  font-size: 0.75rem;
+  color: var(--fg-muted);
+  white-space: nowrap;
+}
+
+.notes-debug__name {
+  color: var(--accent);
 }
 
 /* ============================================================ */

@@ -2,9 +2,7 @@
  * Shared data shapes. Mirrors backend/app/schemas.py — when changes happen
  * here, update the Pydantic models in lockstep.
  *
- * Runtime validation lives in `frontend/src/audio/validate.ts` (Zod). The
- * types here are compile-time only; the validator is the source of truth at
- * runtime for anything coming off the network.
+ * Runtime validation lives in `frontend/src/audio/validate.ts` (Zod).
  */
 
 export type Mode = "major" | "minor" | "dorian" | "mixolydian";
@@ -53,32 +51,24 @@ export interface Drums {
 }
 
 /**
- * Full arrangement returned by Claude.
+ * Arrangement built from the user's hum.
  *
- * Played back as: hummed melody → guitar lead line, chord_progression
- * underneath (strummed/picked per voicing), drums keeping time.
+ * `melody` is the source-of-truth lead line — pitch-detected from the hum,
+ * preserved verbatim. The agent picks tempo, key, and OPTIONAL
+ * chord_progression / drums layers when the user explicitly asks.
+ *
+ * First playback: melody only. The user opts into chords + drums.
  */
 export interface Arrangement {
-  tempo: number; // BPM, 60-180
+  tempo: number;
   key: Key;
-  /** Exactly 4 chord symbols, looped. */
+  /** The hummed melody — always present. */
+  melody: Note[];
+  /** Empty array when the user hasn't asked for chords yet. */
   chord_progression: string[];
-  guitar: Guitar;
-  drums: Drums;
-  /** 1-3 sentences in plain English. Streamed to the chat bubble. */
+  /** Null when chord_progression is empty. */
+  guitar: Guitar | null;
+  /** Null until the user adds drums. */
+  drums: Drums | null;
   rationale: string;
 }
-
-/**
- * A single voice-driven edit operation. Claude picks one or more in response
- * to user intent and returns the new Arrangement with these applied.
- */
-export type ArrangementEdit =
-  | { op: "mode-shift"; to: Mode }
-  | { op: "transpose"; semitones: number }
-  | { op: "tempo"; bpm: number }
-  | { op: "swap-kit"; kit: DrumKit }
-  | { op: "simplify"; lane: "drums" | "guitar" }
-  | { op: "intensify"; lane: "drums" | "guitar" }
-  | { op: "reharmonize"; vibe: "darker" | "brighter" | "tense" | "resolved" }
-  | { op: "voicing"; to: GuitarVoicing };

@@ -1,9 +1,9 @@
 /**
  * Runtime validation for network responses.
  *
- * TypeScript types in `@shared/types` are compile-time only — they can't catch
- * Claude returning a malformed Arrangement. Zod is the source of truth at
- * runtime; any JSON crossing the wire goes through these schemas.
+ * Any JSON crossing the wire goes through these Zod schemas before downstream
+ * code sees it. Compile-time types in `@shared/types` are intent; these are
+ * truth.
  */
 
 import { z } from "zod";
@@ -62,12 +62,20 @@ export const DrumsSchema = z.object({
   pattern: DrumPatternSchema,
 });
 
+// chord_progression must be empty OR exactly 4 entries
+const ChordProgressionSchema = z
+  .array(z.string())
+  .refine((arr) => arr.length === 0 || arr.length === 4, {
+    message: "chord_progression must be empty or exactly 4 chords.",
+  });
+
 export const ArrangementSchema = z.object({
   tempo: z.number().int().min(60).max(180),
   key: KeySchema,
-  chord_progression: z.array(z.string()).length(4, "Need exactly 4 chord symbols."),
-  guitar: GuitarSchema,
-  drums: DrumsSchema,
+  melody: z.array(NoteSchema),
+  chord_progression: ChordProgressionSchema,
+  guitar: GuitarSchema.nullable(),
+  drums: DrumsSchema.nullable(),
   rationale: z.string().min(1),
 });
 

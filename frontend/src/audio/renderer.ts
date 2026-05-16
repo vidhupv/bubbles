@@ -1,101 +1,130 @@
 /**
  * Schedule an Arrangement on Tone.Transport.
  *
- * Loop structure (4 bars total): bar i plays chord_progression[i], repeating
- * forever until stop(). Within each bar: guitar plays the 16-step rhythm
- * pattern against the current chord; drums play kick/snare/hat in parallel.
+ * Three layers, each opt-in EXCEPT the melody:
+ *   1. melody  — ALWAYS plays. The user's hummed notes on guitar, at their
+ *                detected onset times.
+ *   2. chords  — only if chord_progression is non-empty. Soft sustained
+ *                voicing once per bar, layered under the melody.
+ *   3. drums   — only if drums is present.
  *
- * The pure step → event mapping lives in `planEvents()` and is fully unit
- * tested; the Tone.js application layer is `play()`.
+ * The pure layout (Arrangement → list of PlannedEvents) lives in
+ * `planEvents()` and is fully unit-tested. The Tone.js application layer is
+ * `play()`.
  */
 
 import * as Tone from "tone";
-import type { Arrangement } from "@shared/types";
+import type { Arrangement, Note } from "@shared/types";
 import { chordToMidi, midiToNoteName } from "./chord";
 import { parsePattern } from "./pattern";
 import type { Instruments } from "./sampler";
 
 const BAR_STEPS = 16;
 const TOTAL_BARS = 4;
-const TOTAL_STEPS = BAR_STEPS * TOTAL_BARS;
 
-export type Target = "kick" | "snare" | "hat" | "guitar";
+export type Target = "kick" | "snare" | "hat" | "guitar" | "chord-pad";
 
 export interface PlannedEvent {
-  step: number; // 0..63
+  /** Time in seconds from loop start. */
+  time: number;
   target: Target;
-  /** MIDI note numbers — empty for drum hits that don't carry pitch (snare). */
+  /** MIDI notes. Empty for snare. */
   notes: number[];
   velocity: number;
+  /** Duration in seconds. Used for guitar/chord notes. */
+  duration: number;
 }
 
-/**
- * Pure transform: arrangement → ordered events. No Tone.js. No timing — the
- * caller schedules each `step` at the appropriate Transport position.
- */
-export function planEvents(arrangement: Arrangement): PlannedEvent[] {
-  const guitarSteps = parsePattern(arrangement.guitar.rhythm);
-  const kickSteps = parsePattern(arrangement.drums.pattern.kick);
-  const snareSteps = parsePattern(arrangement.drums.pattern.snare);
-  const hatSteps = parsePattern(arrangement.drums.pattern.hat);
+interface PlanResult {
+  events: PlannedEvent[];
+  /** Loop length in seconds (for Tone.Part loopEnd). */
+  loopSeconds: number;
+}
 
-  const chordMidis = arrangement.chord_progression.map(chordToMidi);
+/** Pure transform: arrangement → ordered events. No Tone.js. */
+export function planEvents(arrangement: Arrangement): PlanResult {
+  const stepSeconds = 60 / arrangement.tempo / 4; // 16th notes
+  const barSeconds = BAR_STEPS * stepSeconds;
+  const loopSeconds = TOTAL_BARS * barSeconds;
+
   const events: PlannedEvent[] = [];
 
-  for (let step = 0; step < TOTAL_STEPS; step++) {
-    const bar = Math.floor(step / BAR_STEPS);
-    const inBar = step % BAR_STEPS;
-    const chord = chordMidis[bar % chordMidis.length];
+  // 1. MELODY — always. Play the user's notes at their original times.
+  for (const note of arrangement.melody) {
+    const duration = Math.max(note.end - note.start, 0.08);
+    events.push({
+      time: note.start,
+      target: "guitar",
+      notes: [note.midi],
+      velocity: Math.max(note.velocity, 0.5),
+      duration,
+    });
+  }
 
-    const kick = kickSteps[inBar];
-    if (kick.kind === "hit") {
-      events.push({ step, target: "kick", notes: [36], velocity: kick.velocity });
-    }
-    const snare = snareSteps[inBar];
-    if (snare.kind === "hit") {
-      events.push({ step, target: "snare", notes: [], velocity: snare.velocity });
-    }
-    const hat = hatSteps[inBar];
-    if (hat.kind === "hit") {
-      events.push({ step, target: "hat", notes: [72], velocity: hat.velocity });
-    }
-    const gtr = guitarSteps[inBar];
-    if (gtr.kind === "hit") {
-      events.push({ step, target: "guitar", notes: chord, velocity: gtr.velocity });
+  // 2. CHORDS — optional. One sustained chord per bar.
+  if (arrangement.chord_progression.length > 0) {
+    const chordMidis = arrangement.chord_progression.map(chordToMidi);
+    for (let bar = 0; bar < TOTAL_BARS; bar++) {
+      const chord = chordMidis[bar % chordMidis.length];
+      events.push({
+        time: bar * barSeconds,
+        target: "chord-pad",
+        notes: chord,
+        velocity: 0.35,
+        duration: barSeconds * 0.95,
+      });
     }
   }
 
-  return events;
+  // 3. DRUMS — optional. 16-step patterns repeated each bar.
+  if (arrangement.drums) {
+    const kickSteps = parsePattern(arrangement.drums.pattern.kick);
+    const snareSteps = parsePattern(arrangement.drums.pattern.snare);
+    const hatSteps = parsePattern(arrangement.drums.pattern.hat);
+    for (let bar = 0; bar < TOTAL_BARS; bar++) {
+      for (let i = 0; i < BAR_STEPS; i++) {
+        const t = bar * barSeconds + i * stepSeconds;
+        const k = kickSteps[i];
+        if (k.kind === "hit") {
+          events.push({ time: t, target: "kick", notes: [36], velocity: k.velocity, duration: stepSeconds });
+        }
+        const s = snareSteps[i];
+        if (s.kind === "hit") {
+          events.push({ time: t, target: "snare", notes: [], velocity: s.velocity, duration: stepSeconds });
+        }
+        const h = hatSteps[i];
+        if (h.kind === "hit") {
+          events.push({ time: t, target: "hat", notes: [72], velocity: h.velocity, duration: stepSeconds });
+        }
+      }
+    }
+  }
+
+  events.sort((a, b) => a.time - b.time);
+  return { events, loopSeconds };
 }
 
 export interface PlaybackHandle {
   stop(): void;
 }
 
-/**
- * Apply the planned events to Tone.js and start the Transport.
- *
- * Calling `play()` while a previous handle is alive is undefined behavior —
- * stop the old one first.
- */
+/** Apply planned events to Tone.js and start the Transport. */
 export function play(arrangement: Arrangement, instr: Instruments): PlaybackHandle {
-  const events = planEvents(arrangement);
+  const { events, loopSeconds } = planEvents(arrangement);
 
   Tone.Transport.stop();
   Tone.Transport.cancel(0);
   Tone.Transport.position = 0;
   Tone.Transport.bpm.value = arrangement.tempo;
 
-  // Tone.Part accepts {time, ...value} objects OR [time, value] tuples at
-  // runtime. The TS types are stricter than the runtime — pass objects with
-  // an inline `time` field to satisfy both.
-  const scheduled = events.map((ev) => ({ time: `${ev.step}*16n`, ...ev }));
-  const part = new Tone.Part<typeof scheduled[number]>((time, ev) => {
+  // Tone.Part requires a `time` field on each event; PlannedEvent already
+  // has one, so we hand the list over directly.
+  const part = new Tone.Part<PlannedEvent>((time, ev) => {
     fire(instr, ev, time);
-  }, scheduled);
+  }, events);
 
   part.loop = true;
-  part.loopEnd = `${TOTAL_STEPS}*16n`;
+  part.loopEnd = loopSeconds;
   part.start(0);
   Tone.Transport.start();
 
@@ -112,18 +141,26 @@ export function play(arrangement: Arrangement, instr: Instruments): PlaybackHand
 function fire(instr: Instruments, ev: PlannedEvent, time: number): void {
   switch (ev.target) {
     case "kick":
-      instr.drums.kick.triggerAttackRelease("C2", "16n", time, ev.velocity);
+      instr.drums.kick.triggerAttackRelease("C2", ev.duration, time, ev.velocity);
       return;
     case "snare":
-      instr.drums.snare.triggerAttackRelease("16n", time, ev.velocity);
+      instr.drums.snare.triggerAttackRelease(ev.duration, time, ev.velocity);
       return;
     case "hat":
-      instr.drums.hat.triggerAttackRelease("C5", "16n", time, ev.velocity);
+      instr.drums.hat.triggerAttackRelease("C5", ev.duration, time, ev.velocity);
       return;
     case "guitar": {
-      const notes = ev.notes.map(midiToNoteName);
-      instr.guitar.triggerAttackRelease(notes, "8n", time, ev.velocity);
+      const names = ev.notes.map(midiToNoteName);
+      instr.guitar.triggerAttackRelease(names, ev.duration, time, ev.velocity);
+      return;
+    }
+    case "chord-pad": {
+      const names = ev.notes.map(midiToNoteName);
+      instr.guitar.triggerAttackRelease(names, ev.duration, time, ev.velocity);
       return;
     }
   }
 }
+
+// Re-export for tests that previously imported these.
+export type { Note };

@@ -16,6 +16,13 @@ from basic_pitch.inference import predict
 
 from app.schemas import Note, PitchResult
 
+# Lower thresholds = more sensitive. Hummed input is quieter / softer-attack
+# than the defaults are tuned for, so we relax both. The online basic-pitch
+# demo at Spotify uses similarly aggressive settings.
+_ONSET_THRESHOLD = 0.3
+_FRAME_THRESHOLD = 0.2
+_MIN_NOTE_LEN_MS = 80.0
+
 log = logging.getLogger(__name__)
 
 # MIDI note number → letter name (sharps; flat-equivalence handled by Claude).
@@ -37,7 +44,12 @@ def detect_pitch_from_bytes(audio_bytes: bytes, suffix: str = ".wav") -> PitchRe
         tmp_path = Path(tmp.name)
 
     try:
-        _model_output, _midi_data, note_events = predict(str(tmp_path))
+        _model_output, _midi_data, note_events = predict(
+            str(tmp_path),
+            onset_threshold=_ONSET_THRESHOLD,
+            frame_threshold=_FRAME_THRESHOLD,
+            minimum_note_length=_MIN_NOTE_LEN_MS,
+        )
     finally:
         tmp_path.unlink(missing_ok=True)
 
