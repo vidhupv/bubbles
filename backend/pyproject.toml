@@ -1,0 +1,29 @@
+[project]
+name = "bubbles-backend"
+version = "0.1.0"
+description = "Local backend for Bubbles: pitch detection + Claude Agent SDK arrangement endpoint"
+requires-python = ">=3.11,<3.12"
+dependencies = [
+    "fastapi>=0.115.0",
+    "uvicorn[standard]>=0.32.0",
+    "python-multipart>=0.0.12",
+    "basic-pitch[coreml]>=0.4.0",
+    "numpy>=1.24,<2.0",
+    "soundfile>=0.12.1",
+    "pydantic>=2.9.0",
+    "setuptools>=75.0,<80",
+]
+
+[dependency-groups]
+dev = [
+    "ruff>=0.7.0",
+    "pytest>=8.0.0",
+    "httpx>=0.27.0",
+]
+
+[tool.ruff]
+line-length = 100
+target-version = "py311"
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "B", "UP"]

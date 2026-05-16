@@ -1,0 +1,75 @@
+/* Day 1 minimal styling. Real warm-dark-mode + Fraunces + JetBrains Mono
+   tokens land on Day 11 per the design review. */
+
+:root {
+  color-scheme: dark;
+  --bg: #0f0e0d;
+  --fg: #f4f0ea;
+  --accent: #d4892f;
+  --muted: rgba(244, 240, 234, 0.55);
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body {
+  margin: 0;
+  padding: 0;
+  background: var(--bg);
+  color: var(--fg);
+  font-family: ui-sans-serif, system-ui, sans-serif;
+}
+
+.day1 {
+  max-width: 720px;
+  margin: 4rem auto;
+  padding: 0 2rem;
+}
+
+.day1 h1 {
+  font-size: 3rem;
+  font-weight: 400;
+  margin: 0 0 0.25rem;
+}
+
+.subtitle {
+  color: var(--muted);
+  margin: 0 0 1.5rem;
+}
+
+.note {
+  font-size: 0.9rem;
+  color: var(--muted);
+  border-left: 2px solid var(--accent);
+  padding-left: 0.75rem;
+  margin: 1rem 0 2rem;
+}
+
+input[type="file"] {
+  color: var(--fg);
+  padding: 0.5rem 0;
+}
+
+.error {
+  color: #ff8a7a;
+}
+
+.result {
+  margin-top: 2rem;
+  padding: 1.25rem;
+  background: #1a1817;
+  border-radius: 6px;
+}
+
+.result h2 {
+  margin: 0 0 0.25rem;
+  color: var(--accent);
+}
+
+.result ul {
+  font-family: ui-monospace, SFMono-Regular, monospace;
+  font-size: 0.85rem;
+  padding-left: 1.25rem;
+}

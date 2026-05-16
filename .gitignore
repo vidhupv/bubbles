@@ -1,0 +1,33 @@
+# Python
+backend/.venv/
+backend/__pycache__/
+backend/**/__pycache__/
+backend/*.egg-info/
+backend/.python-version
+
+# Node
+frontend/node_modules/
+frontend/dist/
+frontend/.vite/
+
+# Env
+.env
+.env.local
+backend/.env
+
+# OS
+.DS_Store
+
+# IDE
+.vscode/
+.idea/
+
+# Tests / caches
+.pytest_cache/
+.ruff_cache/
+playwright-report/
+test-results/
+
+# Audio output
+*.wav.tmp
+exports/
