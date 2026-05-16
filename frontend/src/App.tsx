@@ -1,13 +1,15 @@
 /**
  * Bubbles main app.
  *
- * Flow ("start basic, complicate it"):
+ * Flow:
  *   1. Press + hold blob → hum → release.
  *   2. Backend pitch-detects and returns a melody-only Arrangement.
- *   3. Frontend plays your hum back on guitar — exactly the notes you sang.
- *   4. + chords / + drums buttons add layers via Claude.
- *   5. Voice mic / sadder-heavier-simpler refine whatever exists.
- *   6. Bottom-right export.wav downloads a 60s WAV.
+ *   3. Frontend plays the hum back on a Karplus-Strong pluck (placeholder
+ *      for real guitar samples).
+ *   4. Layers panel lets you + chords / + drums / regenerate / remove.
+ *   5. Voice mic + vibe presets refine whatever exists.
+ *   6. Stop button halts playback; replay restarts.
+ *   7. Bottom-right export.wav downloads a 60s WAV.
  */
 import { useCallback, useEffect, useRef, useState } from "react";
 import type { Arrangement } from "@shared/types";
@@ -16,9 +18,10 @@ import { play, type PlaybackHandle } from "./audio/renderer";
 import { loadInstruments, unlockAudio, type Instruments } from "./audio/sampler";
 import { ExportLink } from "./components/ExportLink";
 import { HumButton, type HumButtonState } from "./components/HumButton";
-import { LayerControls } from "./components/LayerControls";
+import { Layers } from "./components/Layers";
 import { MobileFallback } from "./components/MobileFallback";
 import { NotesDebug } from "./components/NotesDebug";
+import { PlaybackControls } from "./components/PlaybackControls";
 import { RationaleChat } from "./components/RationaleChat";
 import { VibePresets } from "./components/VibePresets";
 import { VoiceMic } from "./components/VoiceMic";
@@ -32,13 +35,15 @@ const REC_COPY = "Listening…";
 const PROC_COPY_INITIAL = "Hearing your hum.";
 const PROC_COPY_REFINE = "Bubbles is thinking.";
 const DENIED_COPY = "Mic blocked — click to retry.";
+const STOPPED_COPY = "Stopped. Replay or hum again.";
 
 type Phase =
   | "idle"
   | "recording"
-  | "processing-initial" // pitch detection on first hum
-  | "processing-refine" // Claude refining
+  | "processing-initial"
+  | "processing-refine"
   | "playing"
+  | "stopped"
   | "denied";
 
 export function App() {
@@ -81,9 +86,26 @@ export function App() {
     playbackRef.current = play(arr, instrumentsRef.current);
   }, []);
 
+  const stopPlayback = useCallback(() => {
+    playbackRef.current?.stop();
+    playbackRef.current = null;
+    setPhase("stopped");
+  }, []);
+
+  const replay = useCallback(async () => {
+    if (!arrangement) return;
+    await renderArrangement(arrangement);
+    setPhase("playing");
+  }, [arrangement, renderArrangement]);
+
   const handlePressDown = useCallback(async () => {
     if (phase === "processing-initial" || phase === "processing-refine") return;
     setErrorMsg(null);
+    // Implicit stop — pressing the blob always starts fresh.
+    if (playbackRef.current) {
+      playbackRef.current.stop();
+      playbackRef.current = null;
+    }
     pressStartRef.current = Date.now();
     try {
       await recorder.start();
@@ -139,6 +161,27 @@ export function App() {
     [arrangement, renderArrangement],
   );
 
+  // Client-side layer removal — no Claude call needed.
+  const removeChords = useCallback(async () => {
+    if (!arrangement) return;
+    const next: Arrangement = {
+      ...arrangement,
+      chord_progression: [],
+      guitar: null,
+    };
+    setArrangement(next);
+    await renderArrangement(next);
+    setPhase("playing");
+  }, [arrangement, renderArrangement]);
+
+  const removeDrums = useCallback(async () => {
+    if (!arrangement) return;
+    const next: Arrangement = { ...arrangement, drums: null };
+    setArrangement(next);
+    await renderArrangement(next);
+    setPhase("playing");
+  }, [arrangement, renderArrangement]);
+
   const handleVoicePressDown = useCallback(() => {
     if (!voice.supported || phase.startsWith("processing")) return;
     voice.start();
@@ -176,12 +219,13 @@ export function App() {
             ? PROC_COPY_REFINE
             : phase === "denied"
               ? DENIED_COPY
-              : IDLE_COPY;
+              : phase === "stopped"
+                ? STOPPED_COPY
+                : IDLE_COPY;
 
   const hasArrangement = arrangement !== null;
-  const hasChords = (arrangement?.chord_progression.length ?? 0) > 0;
-  const hasDrums = arrangement?.drums !== null && arrangement?.drums !== undefined;
-  const processing = phase === "processing-initial" || phase === "processing-refine";
+  const processing =
+    phase === "processing-initial" || phase === "processing-refine";
 
   return (
     <>
@@ -205,14 +249,26 @@ export function App() {
 
         {hasArrangement && (
           <div className="controls">
-            <LayerControls
-              hasChords={hasChords}
-              hasDrums={hasDrums}
+            <PlaybackControls
+              playing={phase === "playing"}
               disabled={processing}
-              onAddChords={() => refine(hasChords ? "regenerate the chords" : "add chords")}
-              onAddDrums={() => refine(hasDrums ? "regenerate the drums" : "add drums")}
+              onStop={stopPlayback}
+              onReplay={replay}
             />
+
+            <Layers
+              arrangement={arrangement!}
+              disabled={processing}
+              onRegenerateChords={() => refine("regenerate the chords")}
+              onRemoveChords={removeChords}
+              onAddChords={() => refine("add chords")}
+              onRegenerateDrums={() => refine("regenerate the drums")}
+              onRemoveDrums={removeDrums}
+              onAddDrums={() => refine("add drums")}
+            />
+
             <VibePresets disabled={processing} onPick={refine} />
+
             <VoiceMic
               listening={voice.listening}
               supported={voice.supported}
@@ -225,11 +281,16 @@ export function App() {
                 {voice.transcript || "Listening for your refinement…"}
               </span>
             )}
+
             <NotesDebug
               notes={arrangement!.melody}
               tempo={arrangement!.tempo}
               keyLabel={`${arrangement!.key.tonic} ${arrangement!.key.mode}`}
             />
+
+            <p className="placeholder-note">
+              <em>Sound is a placeholder pluck synth. Real guitar samples land in v1.1.</em>
+            </p>
           </div>
         )}
       </main>

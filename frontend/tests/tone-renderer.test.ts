@@ -10,10 +10,10 @@ import { planEvents } from "../src/audio/renderer";
 import { FULL_ARRANGEMENT, MELODY_ONLY_ARRANGEMENT } from "../src/audio/fixtures";
 
 describe("planEvents — melody only", () => {
-  it("emits one guitar event per hummed note and nothing else", () => {
+  it("emits one melody event per hummed note and nothing else", () => {
     const { events } = planEvents(MELODY_ONLY_ARRANGEMENT);
     expect(events).toHaveLength(MELODY_ONLY_ARRANGEMENT.melody.length);
-    expect(events.every((e) => e.target === "guitar")).toBe(true);
+    expect(events.every((e) => e.target === "melody")).toBe(true);
   });
 
   it("preserves the hum's MIDI numbers verbatim", () => {
@@ -36,20 +36,22 @@ describe("planEvents — melody only", () => {
 });
 
 describe("planEvents — chords opt-in", () => {
-  it("adds one chord-pad event per bar when chord_progression is non-empty", () => {
+  it("emits two chord-pad strums per bar when chord_progression is non-empty", () => {
     const { events } = planEvents(FULL_ARRANGEMENT);
     const padEvents = events.filter((e) => e.target === "chord-pad");
-    expect(padEvents).toHaveLength(4);
+    // 4 bars × 2 half-note strums = 8.
+    expect(padEvents).toHaveLength(8);
   });
 
   it("rotates chord_progression by bar", () => {
     const { events } = planEvents(FULL_ARRANGEMENT);
     const pads = events.filter((e) => e.target === "chord-pad");
-    // Am F C G in MIDI: 57/60/64, 53/57/60, 48/52/55, 55/59/62
+    // Am F C G in MIDI: 57/60/64, 53/57/60, 48/52/55, 55/59/62.
+    // Two strums per bar, same chord both times.
     expect(pads[0].notes).toEqual([57, 60, 64]);
-    expect(pads[1].notes).toEqual([53, 57, 60]);
-    expect(pads[2].notes).toEqual([48, 52, 55]);
-    expect(pads[3].notes).toEqual([55, 59, 62]);
+    expect(pads[1].notes).toEqual([57, 60, 64]);
+    expect(pads[2].notes).toEqual([53, 57, 60]);
+    expect(pads[6].notes).toEqual([55, 59, 62]);
   });
 
   it("does NOT emit chord pads when chord_progression is empty", () => {

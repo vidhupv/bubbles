@@ -1,10 +1,15 @@
 /**
  * Instrument factory.
  *
- * Day 2 ships with synthesized placeholders so we can hear sound today without
- * shipping audio fixtures. Day 10 swaps these for real CC-licensed samples
- * (Karoryfer / Freesound) via Tone.Sampler + an AudioBuffer cache; the public
- * shape returned here doesn't change.
+ * MVP placeholder voices — Day 10 will swap these for real CC-licensed
+ * samples behind the same `Instruments` shape.
+ *
+ * Voice choices:
+ *   - melody:  Tone.PluckSynth — Karplus-Strong physical-modeling pluck.
+ *              Closer to an acoustic guitar than a triangle-wave PolySynth.
+ *   - chordPad: Tone.PolySynth(FMSynth) — soft sustained pad, separated
+ *              from the melody so chord and lead don't blur into each other.
+ *   - kick / snare / hat: standard Tone synth drums.
  *
  * Tone.start() must be called from a user gesture before any of these make
  * sound. The component layer is responsible for that.
@@ -20,26 +25,37 @@ export interface Drums {
 }
 
 export interface Instruments {
-  guitar: Tone.PolySynth;
+  /** Lead voice. Plays the user's hummed melody. */
+  melody: Tone.PluckSynth;
+  /** Soft pad layer for chord_progression. Separate voice so it doesn't
+   *  collide with the melody. */
+  chordPad: Tone.PolySynth;
   drums: Drums;
   master: Tone.Gain;
   dispose(): void;
 }
 
-/**
- * Build the instrument set and route everything through a master Gain node.
- * Idempotent at the module level — callers should hold on to the returned
- * object and call `dispose()` when tearing down.
- */
 export function loadInstruments(): Instruments {
   const master = new Tone.Gain(0.85).toDestination();
 
-  // Guitar: PluckSynth-flavored polysynth. Cheap, glassy, fine for Day 2.
-  const guitar = new Tone.PolySynth(Tone.Synth, {
-    oscillator: { type: "triangle" },
-    envelope: { attack: 0.005, decay: 0.15, sustain: 0.2, release: 0.7 },
+  // PluckSynth is monophonic and gives one bright pluck per triggerAttackRelease.
+  // For a chord (multiple notes), the caller has to fire each note separately.
+  const melody = new Tone.PluckSynth({
+    attackNoise: 0.7,
+    dampening: 4000,
+    resonance: 0.92,
   }).connect(master);
-  guitar.volume.value = -8;
+  melody.volume.value = -4;
+
+  const chordPad = new Tone.PolySynth(Tone.FMSynth, {
+    harmonicity: 1.2,
+    modulationIndex: 2.5,
+    oscillator: { type: "sine" },
+    envelope: { attack: 0.18, decay: 0.4, sustain: 0.6, release: 1.4 },
+    modulation: { type: "triangle" },
+    modulationEnvelope: { attack: 0.2, decay: 0.4, sustain: 0.3, release: 1.0 },
+  }).connect(master);
+  chordPad.volume.value = -16;
 
   const kick = new Tone.MembraneSynth({
     pitchDecay: 0.04,
@@ -74,18 +90,19 @@ export function loadInstruments(): Instruments {
   };
 
   return {
-    guitar,
+    melody,
+    chordPad,
     drums,
     master,
     dispose() {
-      guitar.dispose();
+      melody.dispose();
+      chordPad.dispose();
       drums.dispose();
       master.dispose();
     },
   };
 }
 
-/** Resume the AudioContext if it's suspended. Must run inside a user gesture. */
 export async function unlockAudio(): Promise<void> {
   if (Tone.getContext().state !== "running") {
     await Tone.start();

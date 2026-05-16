@@ -25,11 +25,20 @@ export async function renderToWav(arrangement: Arrangement): Promise<Blob> {
       fade.gain.setValueAtTime(1, totalSeconds - FADE_OUT_S);
       fade.gain.linearRampToValueAtTime(0, totalSeconds);
 
-      const guitar = new Tone.PolySynth(Tone.Synth, {
-        oscillator: { type: "triangle" },
-        envelope: { attack: 0.005, decay: 0.15, sustain: 0.2, release: 0.7 },
+      const melody = new Tone.PluckSynth({
+        attackNoise: 0.7,
+        dampening: 4000,
+        resonance: 0.92,
       }).connect(fade);
-      guitar.volume.value = -8;
+      melody.volume.value = -4;
+
+      const chordPad = new Tone.PolySynth(Tone.FMSynth, {
+        harmonicity: 1.2,
+        modulationIndex: 2.5,
+        oscillator: { type: "sine" },
+        envelope: { attack: 0.18, decay: 0.4, sustain: 0.6, release: 1.4 },
+      }).connect(fade);
+      chordPad.volume.value = -16;
 
       const kick = new Tone.MembraneSynth({
         pitchDecay: 0.04,
@@ -67,10 +76,20 @@ export async function renderToWav(arrangement: Arrangement): Promise<Blob> {
             case "hat":
               hat.triggerAttackRelease("C5", ev.duration, time, ev.velocity);
               break;
-            case "guitar":
+            case "melody": {
+              for (const midi of ev.notes) {
+                melody.triggerAttackRelease(
+                  midiToNoteName(midi),
+                  ev.duration,
+                  time,
+                  ev.velocity,
+                );
+              }
+              break;
+            }
             case "chord-pad": {
               const names = ev.notes.map(midiToNoteName);
-              guitar.triggerAttackRelease(names, ev.duration, time, ev.velocity);
+              chordPad.triggerAttackRelease(names, ev.duration, time, ev.velocity);
               break;
             }
           }

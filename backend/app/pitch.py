@@ -16,12 +16,18 @@ from basic_pitch.inference import predict
 
 from app.schemas import Note, PitchResult
 
-# Lower thresholds = more sensitive. Hummed input is quieter / softer-attack
-# than the defaults are tuned for, so we relax both. The online basic-pitch
-# demo at Spotify uses similarly aggressive settings.
-_ONSET_THRESHOLD = 0.3
-_FRAME_THRESHOLD = 0.2
-_MIN_NOTE_LEN_MS = 80.0
+# basic-pitch defaults match the Spotify online demo's accuracy. Lowering
+# onset_threshold causes sustained notes to be re-triggered (fragmenting one
+# held "Saaaa" into 5 short attacks) — keep it at the default. We compensate
+# with `_merge_sustained_notes()` below to glue any same-pitch fragments
+# back together.
+_ONSET_THRESHOLD = 0.5
+_FRAME_THRESHOLD = 0.3
+_MIN_NOTE_LEN_MS = 127.7
+
+# Max gap (seconds) between two same-pitch notes that we consider one held
+# note that basic-pitch fragmented.
+_MERGE_GAP_S = 0.15
 
 log = logging.getLogger(__name__)
 
@@ -61,6 +67,7 @@ def detect_pitch_from_bytes(audio_bytes: bytes, suffix: str = ".wav") -> PitchRe
             Note(midi=midi, start=float(start), end=float(end), velocity=velocity)
         )
     notes.sort(key=lambda n: n.start)
+    notes = _merge_sustained_notes(notes)
 
     duration = max((n.end for n in notes), default=0.0)
     key_estimate = _estimate_key(notes)
@@ -77,6 +84,36 @@ def detect_pitch_from_bytes(audio_bytes: bytes, suffix: str = ".wav") -> PitchRe
         key_estimate=key_estimate,
         duration=duration,
     )
+
+
+def _merge_sustained_notes(notes: list[Note]) -> list[Note]:
+    """Glue same-pitch consecutive notes back together.
+
+    basic-pitch reliably detects pitch but tends to fragment held notes into
+    several short attacks (the "Saaaa → dudududu" effect the user noticed).
+    This walk-merge fixes that without re-running the model.
+
+    Two notes merge when:
+      - Same MIDI number
+      - Gap between A.end and B.start is < _MERGE_GAP_S
+    Result keeps the earliest start, the latest end, and the max velocity.
+    """
+    if not notes:
+        return notes
+    merged: list[Note] = [notes[0]]
+    for n in notes[1:]:
+        prev = merged[-1]
+        if n.midi == prev.midi and (n.start - prev.end) < _MERGE_GAP_S:
+            # Extend the prior note; keep its onset.
+            merged[-1] = Note(
+                midi=prev.midi,
+                start=prev.start,
+                end=max(prev.end, n.end),
+                velocity=max(prev.velocity, n.velocity),
+            )
+        else:
+            merged.append(n)
+    return merged
 
 
 def _estimate_key(notes: list[Note]) -> str:
