@@ -60,6 +60,42 @@ def test_drums_from_hum_returns_pattern() -> None:
     assert total_hits >= 1
 
 
+def test_merge_close_onsets_collapses_overfires() -> None:
+    """4 distinct 'du' beats over-fire to ~12 onsets — must collapse to 4."""
+    from app.drums import _merge_close_onsets
+
+    # Simulate one beat producing 3 onsets within 50ms each, 4 beats 0.5s apart
+    times = []
+    lanes = []
+    for beat in range(4):
+        for delta in (0.0, 0.03, 0.07):
+            times.append(beat * 0.5 + delta)
+            lanes.append("kick")
+    merged_t, merged_l = _merge_close_onsets(times, lanes, 0.12)
+    assert len(merged_t) == 4
+    assert merged_l == ["kick"] * 4
+    # First-onset of each cluster wins → 0.0, 0.5, 1.0, 1.5
+    for actual, expected in zip(merged_t, [0.0, 0.5, 1.0, 1.5], strict=True):
+        assert abs(actual - expected) < 1e-9
+
+
+def test_merge_keeps_genuinely_distinct_onsets() -> None:
+    """Onsets at 0.5s apart at 120 BPM must NOT merge."""
+    from app.drums import _merge_close_onsets
+
+    times = [0.0, 0.5, 1.0, 1.5]
+    merged_t, _ = _merge_close_onsets(times, ["kick"] * 4, 0.12)
+    assert len(merged_t) == 4
+
+
+def test_tempo_from_onsets_matches_quarter_note_gap() -> None:
+    """4 onsets at 0.5s spacing → tempo should be 120 BPM (quarter notes)."""
+    from app.drums import _tempo_from_onsets
+
+    bpm = _tempo_from_onsets([0.0, 0.5, 1.0, 1.5], fallback=90.0)
+    assert bpm == 120.0
+
+
 def test_drums_from_hum_silence_returns_422() -> None:
     silent = np.zeros(22050, dtype=np.float32)
     buf = io.BytesIO()

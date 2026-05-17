@@ -36,6 +36,13 @@ _STEPS_PER_BAR = 16
 _KICK_MAX_HZ = 800.0
 _SNARE_MAX_HZ = 2500.0
 
+# Minimum gap (seconds) between two onsets that count as separate hits.
+# librosa.onset.onset_detect over-fires on percussive sounds — every
+# beatbox "du" has 3-5 internal transients that come back as distinct
+# events. Real distinct hits are at least ~120ms apart in human-playable
+# rhythms (that's already 16th notes at ~125 BPM).
+_MIN_ONSET_GAP_S = 0.12
+
 
 def detect_drum_pattern_from_bytes(
     audio_bytes: bytes, suffix: str = ".wav"
@@ -60,20 +67,44 @@ def detect_drum_pattern_from_bytes(
         # Pure silence — librosa.beat.beat_track can spin on this. Short-circuit.
         return _empty_pattern(), 90.0
 
-    # Onset detection — `backtrack=True` aligns to the energy floor so the
-    # snap-to-grid math doesn't drift forward.
+    # Onset detection.
+    # - `backtrack=False`: backtrack=True drops the first onset when there's
+    #   no pre-onset energy floor to roll back to.
+    # - Prepend 100ms of silence: onset_detect's pre_max/pre_avg windows
+    #   need a quiet baseline before each onset to detect it. The user's
+    #   recording starts with their first beat already at t≈0, so without
+    #   padding the first onset is silently dropped.
+    _PAD_S = 0.1
+    pad = np.zeros(int(sr * _PAD_S), dtype=y.dtype)
+    y_padded = np.concatenate([pad, y])
     onset_frames = librosa.onset.onset_detect(
-        y=y, sr=sr, units="frames", backtrack=True
+        y=y_padded, sr=sr, units="frames", backtrack=False
     )
     if onset_frames.size == 0:
         return _empty_pattern(), 90.0
 
-    onset_times = librosa.frames_to_time(onset_frames, sr=sr)
-    tempo = _safe_tempo(y, sr)
+    # Shift detected frame indices back to the un-padded timeline. Drop any
+    # onset that lands in the padding window (shouldn't happen — pad is
+    # silent — but be defensive).
+    pad_frames = int(sr * _PAD_S / 512)  # default librosa hop_length is 512
+    onset_frames = onset_frames[onset_frames >= pad_frames] - pad_frames
+    if onset_frames.size == 0:
+        return _empty_pattern(), 90.0
 
-    # Centroid per onset → drum lane
-    centroids = _onset_centroids(y, sr, onset_frames)
-    lanes = [_classify(c) for c in centroids]
+    onset_times_raw = librosa.frames_to_time(onset_frames, sr=sr)
+    centroids_raw = _onset_centroids(y, sr, onset_frames)
+    lanes_raw = [_classify(c) for c in centroids_raw]
+
+    # Merge over-fired onsets within a tight window — librosa fires multiple
+    # times per percussive sound.
+    onset_times, lanes = _merge_close_onsets(
+        list(onset_times_raw), lanes_raw, _MIN_ONSET_GAP_S
+    )
+
+    # Prefer tempo from the actual inter-onset intervals. librosa.beat_track
+    # is unreliable for sparse beatbox input. Fall back to it only when we
+    # don't have enough merged onsets to estimate.
+    tempo = _tempo_from_onsets(onset_times, fallback=_safe_tempo(y, sr))
 
     step_seconds = 60.0 / tempo / 4.0  # 16th notes
     bar_seconds = step_seconds * _STEPS_PER_BAR
@@ -107,6 +138,47 @@ def detect_drum_pattern_from_bytes(
         hat=_collapse_to_one_bar(hat),
     )
     return pattern, tempo
+
+
+def _merge_close_onsets(
+    times: list[float], lanes: list[str], min_gap_s: float
+) -> tuple[list[float], list[str]]:
+    """Drop any onset that lands within `min_gap_s` of the previous kept one.
+
+    Keeps the EARLIEST onset of a cluster (the true attack); drops the
+    over-fires. Returns merged times and aligned lanes.
+    """
+    if not times:
+        return [], []
+    out_t = [times[0]]
+    out_l = [lanes[0]]
+    for t, l in zip(times[1:], lanes[1:], strict=False):
+        if t - out_t[-1] < min_gap_s:
+            continue
+        out_t.append(t)
+        out_l.append(l)
+    return out_t, out_l
+
+
+def _tempo_from_onsets(times: list[float], fallback: float) -> float:
+    """Estimate tempo from the median inter-onset interval.
+
+    Assumes the median gap is the basic pulse (quarter note). Works well
+    for beatbox input where the user is keeping a steady beat. Falls back
+    to the supplied value when there aren't enough onsets to estimate.
+    """
+    if len(times) < 3:
+        return fallback
+    iois = np.diff(times)
+    median_ioi = float(np.median(iois))
+    if median_ioi < 0.05:
+        return fallback
+    bpm = 60.0 / median_ioi
+    while bpm < 60:
+        bpm *= 2
+    while bpm > 180:
+        bpm /= 2
+    return round(bpm, 1)
 
 
 def _safe_tempo(y: np.ndarray, sr: int) -> float:
