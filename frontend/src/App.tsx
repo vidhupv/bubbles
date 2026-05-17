@@ -11,7 +11,13 @@
  */
 import { useCallback, useEffect, useRef, useState } from "react";
 import type { Arrangement, Drums as DrumsType } from "@shared/types";
-import { ApiError, arrangeFromHum, drumsFromHum, refineArrangement } from "./api";
+import {
+  ApiError,
+  arrangeFromHum,
+  detectPitch,
+  drumsFromHum,
+  refineArrangement,
+} from "./api";
 import type { InstrumentId } from "./audio/instruments";
 import { play, type PlaybackHandle } from "./audio/renderer";
 import {
@@ -22,6 +28,7 @@ import {
   type Instruments,
 } from "./audio/sampler";
 import { ExportLink } from "./components/ExportLink";
+import { EditorControls } from "./components/EditorControls";
 import { HumButton, type HumButtonState } from "./components/HumButton";
 import { Layers } from "./components/Layers";
 import { MobileFallback } from "./components/MobileFallback";
@@ -29,6 +36,8 @@ import { NotesDebug } from "./components/NotesDebug";
 import { PlaybackControls } from "./components/PlaybackControls";
 import { RationaleChat } from "./components/RationaleChat";
 import { VoiceMic } from "./components/VoiceMic";
+import { buildArrangementFromChordGuide } from "./audio/chordGuide";
+import { nudgeTempo, transposeArrangement } from "./audio/edit";
 import { useHumDrums } from "./hooks/useHumDrums";
 import { useHumRecorder } from "./hooks/useHumRecorder";
 import { useVoiceCommand } from "./hooks/useVoiceCommand";
@@ -40,8 +49,13 @@ const REC_COPY = "Listening…";
 const PROC_COPY_INITIAL = "Hearing your hum.";
 const PROC_COPY_REFINE = "Bubbles is thinking.";
 const PROC_COPY_DRUMS = "Reading your drums.";
+const PROC_COPY_CHORDS = "Reading your harmony guide.";
 const DENIED_COPY = "Mic blocked — click to retry.";
 const STOPPED_COPY = "Stopped. Replay or hum again.";
+const VOICE_IDLE_COPY = "Hold the bottom mic. Say “add chords” or “add drums”, then hum the part.";
+const VOICE_CHORDS_ARMED_COPY = "Command heard. Hold the bottom mic again and hum the chord movement you want to add.";
+const VOICE_DRUMS_ARMED_COPY = "Command heard. Hold the bottom mic again and beatbox the drum part you want to add.";
+const VOICE_DRUMS_REVIEW_COPY = "Drum overdub added. Does it fit the tune?";
 
 type Phase =
   | "idle"
@@ -53,11 +67,20 @@ type Phase =
   | "stopped"
   | "denied";
 
+type VoiceFlow = "command" | "drum-overdub" | "chord-overdub";
+
+interface DrumReviewState {
+  previousDrums: DrumsType | null;
+}
+
 export function App() {
   const [phase, setPhase] = useState<Phase>("idle");
   const [arrangement, setArrangement] = useState<Arrangement | null>(null);
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
   const [isMobile, setIsMobile] = useState(false);
+  const [voiceFlow, setVoiceFlow] = useState<VoiceFlow>("command");
+  const [voiceHint, setVoiceHint] = useState<string | null>(null);
+  const [drumReview, setDrumReview] = useState<DrumReviewState | null>(null);
 
   const [melodyInstrument, setMelodyInstrument] = useState<InstrumentId>(
     DEFAULT_MELODY_INSTRUMENT,
@@ -69,6 +92,7 @@ export function App() {
   const [chordLoading, setChordLoading] = useState(false);
 
   const recorder = useHumRecorder();
+  const chordRecorder = useHumDrums();
   const drumRecorder = useHumDrums();
   const voice = useVoiceCommand();
   const instrumentsRef = useRef<Instruments | null>(null);
@@ -211,12 +235,66 @@ export function App() {
   const handleHumDrumsPressDown = useCallback(async () => {
     if (!arrangement) return;
     setErrorMsg(null);
+    setDrumReview(null);
     try {
       await drumRecorder.start();
     } catch {
       /* error mirrored */
     }
   }, [arrangement, drumRecorder]);
+
+  const handleHumChordsPressDown = useCallback(async () => {
+    if (!arrangement) return;
+    setErrorMsg(null);
+    try {
+      await chordRecorder.start();
+    } catch {
+      /* error mirrored */
+    }
+  }, [arrangement, chordRecorder]);
+
+  const handleHumChordsPressUp = useCallback(async () => {
+    if (!arrangement) return;
+    const blob = await chordRecorder.stop();
+    if (!blob) {
+      setVoiceHint(VOICE_CHORDS_ARMED_COPY);
+      return;
+    }
+
+    setPhase("processing-refine");
+    setVoiceHint(PROC_COPY_CHORDS);
+    try {
+      const guide = await detectPitch(blob);
+      let next: Arrangement;
+      try {
+        next = await withTimeout(
+          refineArrangement({
+            notes: arrangement.melody,
+            prior: arrangement,
+            bpm_hint: arrangement.tempo,
+            intent: buildChordGuideIntent(guide.notes, guide.key_estimate, guide.bpm),
+          }),
+          8000,
+        );
+      } catch {
+        next = buildArrangementFromChordGuide(
+          arrangement,
+          guide.notes,
+          guide.key_estimate,
+        );
+      }
+      setArrangement(next);
+      await renderArrangement(next);
+      setPhase("playing");
+      setVoiceFlow("command");
+      setVoiceHint(VOICE_IDLE_COPY);
+    } catch (err) {
+      setPhase("playing");
+      setVoiceFlow("command");
+      setVoiceHint(VOICE_IDLE_COPY);
+      setErrorMsg(humanizeError(err));
+    }
+  }, [arrangement, chordRecorder, renderArrangement]);
 
   const handleHumDrumsPressUp = useCallback(async () => {
     if (!arrangement) return;
@@ -237,16 +315,103 @@ export function App() {
 
   const handleVoicePressDown = useCallback(() => {
     if (!voice.supported || phase.startsWith("processing")) return;
+    if (!arrangement) return;
+
+    if (voiceFlow === "drum-overdub") {
+      setErrorMsg(null);
+      setDrumReview(null);
+      void handleHumDrumsPressDown();
+      return;
+    }
+
+    if (voiceFlow === "chord-overdub") {
+      setErrorMsg(null);
+      void handleHumChordsPressDown();
+      return;
+    }
+
     voice.start();
-  }, [voice, phase]);
+  }, [voice, phase, arrangement, voiceFlow, handleHumDrumsPressDown, handleHumChordsPressDown]);
 
   const handleVoicePressUp = useCallback(async () => {
+    if (!arrangement) return;
+
+    if (voiceFlow === "chord-overdub") {
+      await handleHumChordsPressUp();
+      return;
+    }
+
+    if (voiceFlow === "drum-overdub") {
+      const previousDrums = arrangement.drums;
+      const blob = await drumRecorder.stop();
+      if (!blob) {
+        setVoiceHint(VOICE_DRUMS_ARMED_COPY);
+        return;
+      }
+      setPhase("processing-drums");
+      try {
+        const { drums } = await drumsFromHum(blob);
+        const next: Arrangement = { ...arrangement, drums: drums as DrumsType };
+        setArrangement(next);
+        setDrumReview({
+          previousDrums,
+        });
+        await renderArrangement(next);
+        setPhase("playing");
+        setVoiceHint(VOICE_DRUMS_REVIEW_COPY);
+      } catch (err) {
+        setPhase("playing");
+        setErrorMsg(humanizeError(err));
+      }
+      return;
+    }
+
     if (!voice.supported) return;
     const transcript = await voice.stop();
-    if (transcript.trim().length > 0) {
-      await refine(transcript);
+    const intent = transcript.trim();
+    if (intent.length === 0) return;
+
+    if (isDrumOverdubIntent(intent)) {
+      setVoiceFlow("drum-overdub");
+      setVoiceHint(VOICE_DRUMS_ARMED_COPY);
+      return;
     }
-  }, [voice, refine]);
+
+    if (isChordOverdubIntent(intent)) {
+      setVoiceFlow("chord-overdub");
+      setVoiceHint(VOICE_CHORDS_ARMED_COPY);
+      return;
+    }
+
+    setVoiceHint(null);
+    await refine(intent);
+  }, [
+    arrangement,
+    drumRecorder,
+    handleHumChordsPressUp,
+    refine,
+    renderArrangement,
+    voice,
+    voiceFlow,
+    voiceHint,
+  ]);
+
+  const keepVoiceDrums = useCallback(() => {
+    setVoiceFlow("command");
+    setDrumReview(null);
+    setVoiceHint(VOICE_IDLE_COPY);
+  }, []);
+
+  const retryVoiceDrums = useCallback(async () => {
+    if (!arrangement || !drumReview) return;
+    const next: Arrangement = { ...arrangement, drums: drumReview.previousDrums };
+    setArrangement(next);
+    setDrumReview(null);
+    setVoiceFlow("drum-overdub");
+    setVoiceHint(VOICE_DRUMS_ARMED_COPY);
+    await renderArrangement(next);
+    setPhase("playing");
+  }, [arrangement, drumReview, renderArrangement]);
 
   const handleMelodyInstrumentChange = useCallback(
     async (id: InstrumentId) => {
@@ -290,7 +455,35 @@ export function App() {
     [arrangement, ensureInstruments, renderArrangement],
   );
 
+  const applyLocalEdit = useCallback(
+    async (transform: (current: Arrangement) => Arrangement) => {
+      if (!arrangement) return;
+      const next = transform(arrangement);
+      setArrangement(next);
+      await renderArrangement(next);
+      setPhase("playing");
+    },
+    [arrangement, renderArrangement],
+  );
+
+  const handleTranspose = useCallback(
+    async (semitones: number) => {
+      await applyLocalEdit((current) => transposeArrangement(current, semitones));
+    },
+    [applyLocalEdit],
+  );
+
+  const handleTempo = useCallback(
+    async (delta: number) => {
+      await applyLocalEdit((current) => nudgeTempo(current, delta));
+    },
+    [applyLocalEdit],
+  );
+
   if (isMobile) return <MobileFallback />;
+
+  const hasArrangement = arrangement !== null;
+  const processing = phase.startsWith("processing");
 
   const humState: HumButtonState =
     phase === "denied"
@@ -306,6 +499,8 @@ export function App() {
   const copy =
     errorMsg !== null
       ? errorMsg
+      : voiceHint !== null
+        ? voiceHint
       : phase === "recording"
         ? REC_COPY
         : phase === "processing-initial"
@@ -317,11 +512,12 @@ export function App() {
               : phase === "denied"
                 ? DENIED_COPY
                 : phase === "stopped"
-                  ? STOPPED_COPY
-                  : IDLE_COPY;
-
-  const hasArrangement = arrangement !== null;
-  const processing = phase.startsWith("processing");
+                  ? hasArrangement
+                    ? VOICE_IDLE_COPY
+                    : STOPPED_COPY
+                  : hasArrangement
+                    ? VOICE_IDLE_COPY
+                    : IDLE_COPY;
 
   return (
     <>
@@ -351,6 +547,13 @@ export function App() {
               onReplay={replay}
             />
 
+            <EditorControls
+              disabled={processing}
+              tempo={arrangement!.tempo}
+              onTranspose={handleTranspose}
+              onTempo={handleTempo}
+            />
+
             <Layers
               arrangement={arrangement!}
               disabled={processing}
@@ -358,12 +561,15 @@ export function App() {
               chordInstrument={chordInstrument}
               melodyLoading={melodyLoading}
               chordLoading={chordLoading}
+              chordsRecording={chordRecorder.recording}
               drumsRecording={drumRecorder.recording}
               onMelodyInstrumentChange={handleMelodyInstrumentChange}
               onChordInstrumentChange={handleChordInstrumentChange}
               onRegenerateChords={() => refine("regenerate the chords")}
               onRemoveChords={removeChords}
               onAddChords={() => refine("add chords")}
+              onHumChordsPressDown={handleHumChordsPressDown}
+              onHumChordsPressUp={handleHumChordsPressUp}
               onRegenerateDrums={() => refine("regenerate the drums")}
               onRemoveDrums={removeDrums}
               onAddDrums={() => refine("add drums")}
@@ -372,16 +578,33 @@ export function App() {
             />
 
             <VoiceMic
-              listening={voice.listening}
+              listening={
+                voiceFlow === "drum-overdub"
+                  ? drumRecorder.recording
+                  : voiceFlow === "chord-overdub"
+                    ? chordRecorder.recording
+                    : voice.listening
+              }
+              mode={voiceFlow}
               supported={voice.supported}
-              disabled={processing}
+              disabled={processing || !hasArrangement}
               onPressDown={handleVoicePressDown}
               onPressUp={handleVoicePressUp}
             />
-            {voice.listening && (
+            {voiceFlow === "command" && voice.listening && (
               <span className="microcopy" style={{ fontSize: "0.9rem" }}>
                 {voice.transcript || "Listening for your refinement…"}
               </span>
+            )}
+            {voiceFlow === "drum-overdub" && drumReview && (
+              <div className="review-actions" aria-label="Drum overdub review">
+                <button type="button" className="review-actions__btn" onClick={keepVoiceDrums}>
+                  keep drums
+                </button>
+                <button type="button" className="review-actions__btn" onClick={retryVoiceDrums}>
+                  retry
+                </button>
+              </div>
             )}
 
             <NotesDebug
@@ -408,4 +631,50 @@ function humanizeError(err: unknown): string {
     return err.message;
   }
   return err instanceof Error ? err.message : "Something went wrong.";
+}
+
+function isDrumOverdubIntent(intent: string): boolean {
+  const normalized = intent.toLowerCase();
+  return (
+    /(add|layer|put|drop|give).*(drum|beat|rhythm|kick|snare|hat|percussion)/.test(normalized) ||
+    /(drum|beat|rhythm|kick|snare|hat|percussion).*(add|layer|put|drop|give)/.test(normalized)
+  );
+}
+
+function isChordOverdubIntent(intent: string): boolean {
+  const normalized = intent.toLowerCase();
+  return (
+    /(add|layer|put|give).*(chord|harmony|harmonies|pad)/.test(normalized) ||
+    /(chord|harmony|harmonies|pad).*(add|layer|put|give)/.test(normalized)
+  );
+}
+
+function buildChordGuideIntent(
+  notes: Arrangement["melody"],
+  keyEstimate: string,
+  bpm: number,
+): string {
+  const summary = notes
+    .slice(0, 16)
+    .map((note) => `midi=${note.midi} ${note.start.toFixed(2)}-${note.end.toFixed(2)}s`)
+    .join(", ");
+  return (
+    "Add chords that fit the main melody and also follow this hummed harmony guide. " +
+    `Guide key estimate: ${keyEstimate}. Guide tempo: ${Math.round(bpm)} BPM. ` +
+    `Guide notes: ${summary || "none detected"}. Keep the result conservative and musical.`
+  );
+}
+
+async function withTimeout<T>(promise: Promise<T>, ms: number): Promise<T> {
+  let timeoutId: number | undefined;
+  const timeout = new Promise<never>((_, reject) => {
+    timeoutId = window.setTimeout(() => {
+      reject(new Error("Timed out waiting for chord generation."));
+    }, ms);
+  });
+  try {
+    return await Promise.race([promise, timeout]);
+  } finally {
+    if (timeoutId !== undefined) window.clearTimeout(timeoutId);
+  }
 }

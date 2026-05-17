@@ -17,12 +17,15 @@ interface Props {
   chordInstrument: InstrumentId;
   melodyLoading: boolean;
   chordLoading: boolean;
+  chordsRecording: boolean;
   drumsRecording: boolean;
   onMelodyInstrumentChange(id: InstrumentId): void;
   onChordInstrumentChange(id: InstrumentId): void;
   onRegenerateChords(): void;
   onRemoveChords(): void;
   onAddChords(): void;
+  onHumChordsPressDown(): void;
+  onHumChordsPressUp(): void;
   onRegenerateDrums(): void;
   onRemoveDrums(): void;
   onAddDrums(): void;
@@ -40,12 +43,15 @@ export function Layers(props: Props) {
     chordInstrument,
     melodyLoading,
     chordLoading,
+    chordsRecording,
     drumsRecording,
     onMelodyInstrumentChange,
     onChordInstrumentChange,
     onRegenerateChords,
     onRemoveChords,
     onAddChords,
+    onHumChordsPressDown,
+    onHumChordsPressUp,
     onRegenerateDrums,
     onRemoveDrums,
     onAddDrums,
@@ -114,14 +120,36 @@ export function Layers(props: Props) {
               </button>
             </>
           ) : (
-            <button
-              type="button"
-              className="layers__add"
-              disabled={disabled}
-              onClick={onAddChords}
-            >
-              + add
-            </button>
+            <span style={{ display: "flex", gap: "0.5rem" }}>
+              <button
+                type="button"
+                className="layers__add"
+                disabled={disabled}
+                onPointerDown={(e) => {
+                  e.preventDefault();
+                  onHumChordsPressDown();
+                }}
+                onPointerUp={(e) => {
+                  e.preventDefault();
+                  onHumChordsPressUp();
+                }}
+                onPointerCancel={(e) => {
+                  e.preventDefault();
+                  onHumChordsPressUp();
+                }}
+                title="Press and hold to hum the harmony you want"
+              >
+                {chordsRecording ? "◉ humming" : "◉ hum"}
+              </button>
+              <button
+                type="button"
+                className="layers__add"
+                disabled={disabled}
+                onClick={onAddChords}
+              >
+                + AI
+              </button>
+            </span>
           )}
         </span>
       </div>
