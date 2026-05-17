@@ -22,6 +22,7 @@ from typing import Any
 
 from pydantic import ValidationError
 
+from app.library import find_similar
 from app.schemas import (
     Arrangement,
     Drums,
@@ -38,42 +39,63 @@ _PITCH_CLASSES = ["C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "B
 _DEFAULT_BPM = 90
 
 _SYSTEM_PROMPT = (
-        "You are Bubbles, an AI session musician. The user has hummed a melody "
-        "and now wants accompaniment that supports THEIR melody. You DO NOT "
-        "invent the melody — it stays exactly as hummed.\n\n"
-        "Your job: pick tempo, key, optional chord progression, and optional "
-        "drums based on the user's intent.\n\n"
-        "Hard rules:\n"
-        "- Reply with ONLY a JSON object. No markdown fences, no commentary.\n"
-        "- Schema:\n"
-        "  {\n"
-        '    "tempo": int 60-180,\n'
-        '    "key": {"tonic": "A"|"B"|"C"|"D"|"E"|"F"|"G"|sharps allowed,\n'
-        '            "mode": "major"|"minor"|"dorian"|"mixolydian"},\n'
-        '    "chord_progression": [4 chord symbols] OR [] for no chords,\n'
-        '    "guitar": {"voicing": "open-strum"|"power"|"fingerpick"|"muted-chuck",\n'
-        '               "rhythm": "<16-step DSL>",\n'
-        '               "sample_set": "acoustic"|"electric-clean"|"electric-dirty"}\n'
-        '              OR null when chord_progression is [],\n'
-        '    "drums": {"kit": "rock"|"lofi",\n'
-        '              "pattern": {"kick": "<16-step>",\n'
-        '                          "snare": "<16-step>",\n'
-        '                          "hat": "<16-step>"}}\n'
-        '             OR null for no drums,\n'
-        '    "rationale": "1-2 plain English sentences"\n'
-        "  }\n\n"
-        "16-step DSL: x=normal hit, X=accent, o=ghost, .=rest, -=sustain.\n"
-        "Each pattern must be exactly 16 characters.\n\n"
-        "Defaults when uncertain:\n"
-        "- If the user says 'add chords' or 'with chords', return 4 chords + "
-        "guitar; drums stays at its current value.\n"
-        "- If the user says 'add drums', return drums; chord_progression "
-        "stays at its current value.\n"
-        "- If the user just hummed (no intent), return chord_progression=[] "
-        "and drums=null — melody only.\n"
-        "- For 'make it sadder' / 'heavier' / etc., adjust mode/tempo/chord "
-        "choices; keep other layers as-is.\n"
-        "Be conservative. Don't add layers the user didn't ask for."
+    "You are Hummingbird, an AI session musician with strong music-theory "
+    "instincts. The user has hummed a melody and now wants accompaniment that "
+    "supports THEIR melody. You DO NOT invent the melody — it stays exactly "
+    "as hummed.\n\n"
+    "MUSIC THEORY RULES (these matter):\n"
+    "1. The provided melody key/mode is the GROUND TRUTH. Match it exactly.\n"
+    "2. Chord_progression MUST be diatonic to the melody's key. NO BORROWED\n"
+    "   CHORDS unless the user explicitly asks. A minor melody MUST get\n"
+    "   minor-key chords. A major melody MUST get major-key chords.\n"
+    "3. Diatonic chord qualities by mode:\n"
+    "   - MAJOR key (e.g. C major): I=C, ii=Dm, iii=Em, IV=F, V=G, vi=Am, vii°=Bdim\n"
+    "   - MINOR key (e.g. A minor): i=Am, ii°=Bdim, III=C, iv=Dm, v=Em, VI=F, VII=G\n"
+    "   - DORIAN (e.g. D dorian): i=Dm, ii=Em, III=F, IV=G, v=Am, vi°=Bdim, VII=C\n"
+    "4. Strong progressions to default to:\n"
+    "   - MAJOR: I-V-vi-IV, I-IV-V-I, vi-IV-I-V, I-vi-IV-V\n"
+    "   - MINOR: i-VI-III-VII (sad rock), i-iv-i-V, vi-IV-I-V (relative major\n"
+    "     entry), i-VII-VI-VII (Andalusian descent)\n"
+    "   - DORIAN: i-IV-i-VII, i-bVII-IV-i\n"
+    "5. The first chord (chord 1) is almost always the tonic (i / I). The\n"
+    "   fourth chord usually leads back to the tonic (V or VII in minor, V\n"
+    "   in major).\n"
+    "6. Match the melody's emotional weight. Sad/contemplative melodies want\n"
+    "   minor keys; happy/anthemic want major; modal melodies want dorian or\n"
+    "   mixolydian. Never default to major for a minor melody.\n\n"
+    "Hard output rules:\n"
+    "- Reply with ONLY a JSON object. No markdown fences, no commentary.\n"
+    "- Schema:\n"
+    "  {\n"
+    '    "tempo": int 60-180,\n'
+    '    "key": {"tonic": "A"|"B"|"C"|"D"|"E"|"F"|"G"|sharps allowed,\n'
+    '            "mode": "major"|"minor"|"dorian"|"mixolydian"},\n'
+    '    "chord_progression": [4 chord symbols] OR [] for no chords,\n'
+    '    "guitar": {"voicing": "open-strum"|"power"|"fingerpick"|"muted-chuck",\n'
+    '               "rhythm": "<16-step DSL>",\n'
+    '               "sample_set": "acoustic"|"electric-clean"|"electric-dirty"}\n'
+    '              OR null when chord_progression is [],\n'
+    '    "drums": {"kit": "rock"|"lofi",\n'
+    '              "pattern": {"kick": "<16-step>",\n'
+    '                          "snare": "<16-step>",\n'
+    '                          "hat": "<16-step>"}}\n'
+    '             OR null for no drums,\n'
+    '    "rationale": "1-2 plain English sentences"\n'
+    "  }\n\n"
+    "16-step DSL: x=normal hit, X=accent, o=ghost, .=rest, -=sustain.\n"
+    "Each pattern must be exactly 16 characters.\n\n"
+    "Strumming pattern guidance: the guitar.rhythm IS played underneath the\n"
+    "melody as the chord changes per bar. Good strums for different feels:\n"
+    "- Steady ballad: 'x...x...x...x...' (whole notes feel)\n"
+    "- Folk strum: 'x.x.x.x.x.x.x.x.' (eighth notes)\n"
+    "- Driving rock: 'X.x.X.x.X.x.X.x.' (accented offbeats)\n"
+    "- Fingerpicked: 'x..x.x.xx..x.x.x' (alternating bass + treble)\n\n"
+    "Defaults when uncertain:\n"
+    "- 'add chords' / 'with chords' → return 4 chords + guitar; keep drums.\n"
+    "- 'add drums' → return drums; keep chord_progression as-is.\n"
+    "- Just a hum (no intent) → chord_progression=[], drums=null.\n"
+    "- 'make it sadder' → shift mode toward minor; 'happier' toward major.\n"
+    "Be conservative. Don't add layers the user didn't ask for."
 )
 
 
@@ -94,28 +116,36 @@ def _agent_options() -> "ClaudeAgentOptions":  # noqa: F821 — lazy import
 # ---------------------------------------------------------------------------
 
 
-def build_melody_only_arrangement(notes: list[Note], bpm: float | None = None) -> Arrangement:
+def build_melody_only_arrangement(
+    notes: list[Note], bpm: float | None = None, key_estimate: str | None = None
+) -> Arrangement:
     """First-press arrangement: just the hummed melody, no chords, no drums.
 
-    Pure function. No LLM call. Sub-second response. This is what plays back
-    immediately so the user hears their hum on the guitar before deciding
-    whether to add chords or drums.
+    Pure function. No LLM call. Sub-second response.
     """
-    tonic_letter = _estimate_tonic(notes)
+    tonic_letter, mode_name = _parse_key_estimate(key_estimate) if key_estimate else (_estimate_tonic(notes), "minor")
     tempo = _round_tempo(bpm or _DEFAULT_BPM)
 
     return Arrangement(
         tempo=tempo,
-        key=Key(tonic=tonic_letter, mode="minor"),
+        key=Key(tonic=tonic_letter, mode=mode_name),  # type: ignore[arg-type]
         melody=notes,
         chord_progression=[],
         guitar=None,
         drums=None,
         rationale=(
-            f"Your hum, played back in {tonic_letter} minor at {tempo} BPM. "
+            f"Your hum, played back in {tonic_letter} {mode_name} at {tempo} BPM. "
             "Tap + chords or + drums to add layers."
         ),
     )
+
+
+def _parse_key_estimate(text: str) -> tuple[str, str]:
+    """'A minor' → ('A', 'minor'). Falls back to ('A', 'minor') on garbage."""
+    parts = text.strip().split()
+    if len(parts) >= 2 and parts[1].lower() in {"major", "minor", "dorian", "mixolydian"}:
+        return parts[0], parts[1].lower()
+    return "A", "minor"
 
 
 async def agent_refine(
@@ -123,14 +153,16 @@ async def agent_refine(
     intent: str,
     prior: Arrangement | None,
     bpm_hint: float | None = None,
+    key_hint: str | None = None,
 ) -> Arrangement:
     """Refine the arrangement using Claude. Melody is always preserved.
 
-    The agent gets the prior arrangement (if any) and the user's intent. It
-    returns updated tempo/key/chord_progression/guitar/drums. We splice in
-    the original melody verbatim so it can never drift.
+    The agent gets the prior arrangement (if any), the detected melody key,
+    and the user's intent. It returns updated tempo/key/chord_progression/
+    guitar/drums. We splice in the original melody verbatim so it can
+    never drift.
     """
-    user_msg = _build_user_message(notes, intent, prior)
+    user_msg = _build_user_message(notes, intent, prior, key_hint)
 
     for attempt in (1, 2):
         try:
@@ -185,13 +217,55 @@ def _build_user_message(
     notes: list[Note],
     intent: str,
     prior: Arrangement | None,
+    key_hint: str | None = None,
 ) -> str:
-    parts: list[str] = [
-        "User's hum (this is the melody — DO NOT change these notes):",
-        _summarize_notes(notes),
-    ]
+    parts: list[str] = []
+
+    detected_key: str | None = key_hint
+    detected_tonic: str | None = None
+    detected_mode: str | None = None
+    if detected_key:
+        toks = detected_key.split()
+        if len(toks) >= 2:
+            detected_tonic, detected_mode = toks[0], toks[1]
+    elif prior is not None:
+        detected_tonic, detected_mode = prior.key.tonic, prior.key.mode
+        detected_key = f"{detected_tonic} {detected_mode}"
+
+    if detected_key:
+        parts.append(
+            f"DETECTED MELODY KEY: {detected_key}. Your chord_progression MUST be "
+            f"diatonic to this key. Mode must match unless the user explicitly "
+            f"says otherwise."
+        )
+
+    # Taste learning — feed Claude past accepted arrangements in similar keys.
+    tempo_hint = prior.tempo if prior else 90
+    if detected_tonic and detected_mode:
+        similar = find_similar(detected_tonic, detected_mode, tempo_hint, limit=3)
+        if similar:
+            parts.append(
+                "\nThe user has previously kept these arrangements with similar "
+                "characteristics. Use them as taste cues — match the kinds of "
+                "chord choices and progressions the user has already accepted:"
+            )
+            for entry in similar:
+                arr = entry.get("arrangement", {})
+                title = entry.get("title", "untitled")
+                summary = {
+                    "title": title,
+                    "key": arr.get("key"),
+                    "tempo": arr.get("tempo"),
+                    "chord_progression": arr.get("chord_progression"),
+                    "guitar_rhythm": (arr.get("guitar") or {}).get("rhythm"),
+                    "drums_kit": (arr.get("drums") or {}).get("kit"),
+                }
+                parts.append(json.dumps(summary, indent=2))
+
+    parts.append("\nUser's hum (this is the melody — DO NOT change these notes):")
+    parts.append(_summarize_notes(notes))
+
     if prior is not None:
-        # Strip the melody from the prior we show the model; it's noise.
         summary = prior.model_dump(exclude={"melody"})
         parts.append("\nCurrent arrangement (excluding melody):")
         parts.append(json.dumps(summary, indent=2))

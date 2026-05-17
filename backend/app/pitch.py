@@ -117,16 +117,40 @@ def _merge_sustained_notes(notes: list[Note]) -> list[Note]:
 
 
 def _estimate_key(notes: list[Note]) -> str:
-    """Cheap key guess: most-common pitch class is the tonic; mode defaults to minor.
+    """Estimate key as 'TONIC MODE' using Krumhansl-style pitch-class weights.
 
-    Claude refines this anyway via the arrangement's `key` field — this is a
-    nudge, not a hard call.
+    Picks the tonic that has the highest correlation with either the major
+    or minor scale profile. This is much better than always defaulting to
+    minor — works correctly on happy/major melodies.
     """
     if not notes:
         return "C minor"
-    pitch_classes = [n.midi % 12 for n in notes]
-    tonic_idx, _count = Counter(pitch_classes).most_common(1)[0]
-    return f"{_PITCH_CLASSES[tonic_idx]} minor"
+
+    # Pitch-class histogram weighted by note duration (longer notes matter more)
+    weights = [0.0] * 12
+    for n in notes:
+        weights[n.midi % 12] += max(n.end - n.start, 0.05)
+
+    # Krumhansl-Kessler major / minor profiles (simplified to integer-ish).
+    # Higher values = pitches that are characteristic of that mode.
+    major_profile = [6.35, 2.23, 3.48, 2.33, 4.38, 4.09, 2.52, 5.19, 2.39, 3.66, 2.29, 2.88]
+    minor_profile = [6.33, 2.68, 3.52, 5.38, 2.60, 3.53, 2.54, 4.75, 3.98, 2.69, 3.34, 3.17]
+
+    best_score = -1.0
+    best_tonic = 0
+    best_mode = "minor"
+    for tonic in range(12):
+        # Rotate profile so index 0 = tonic
+        for mode, profile in (("major", major_profile), ("minor", minor_profile)):
+            score = sum(
+                weights[(tonic + i) % 12] * profile[i] for i in range(12)
+            )
+            if score > best_score:
+                best_score = score
+                best_tonic = tonic
+                best_mode = mode
+
+    return f"{_PITCH_CLASSES[best_tonic]} {best_mode}"
 
 
 def _estimate_bpm(notes: list[Note], duration: float) -> float:

@@ -1,134 +1,163 @@
 /**
- * The big pulsing-blob hum button — the hero element.
+ * Disc — the central tap-toggle control.
  *
- * Four motion states (locked in /plan-design-review):
- *   idle       slow breathe (3s loop)
- *   recording  tight pulse driven by live mic level
- *   processing irregular shimmer while basic-pitch + Claude run
- *   playing    beat-synced pulse driven by Tone.Transport
+ * Phases:
+ *   idle       — "Press to record" prompt
+ *   recording  — three pulsing accent rings + "Tap to stop"
+ *   processing — rotating arc + animated dots
+ *   playing    — song key + BPM, gentle breathing animation
+ *   paused     — same content as playing, no animation
+ *   denied     — mic-blocked copy
  *
- * Microcopy below the button switches contextually. Press-and-hold to record;
- * release to send. Min duration is enforced by the parent.
+ * Click toggles state (not press-and-hold). Re-recording from a non-idle
+ * state is handled by a separate "Hum again" link in the parent.
  */
-import { useEffect, useState } from "react";
-import * as Tone from "tone";
+import type { Arrangement } from "@shared/types";
 
 export type HumButtonState =
   | "idle"
   | "recording"
   | "processing"
   | "playing"
+  | "paused"
   | "denied";
 
 interface Props {
   state: HumButtonState;
-  level: number;
-  onPressDown(): void;
-  onPressUp(): void;
+  arrangement: Arrangement | null;
+  size: number;
+  onClick(): void;
 }
 
-const SIZE_PX = 360;
-
-export function HumButton({ state, level, onPressDown, onPressUp }: Props) {
-  const [beatPulse, setBeatPulse] = useState(0);
-
-  // Drive the playing-state pulse off Tone.Transport, so the blob moves with
-  // the actual song instead of a free-running animation.
-  useEffect(() => {
-    if (state !== "playing") return;
-    let mounted = true;
-    const id = Tone.Transport.scheduleRepeat((time) => {
-      Tone.Draw.schedule(() => {
-        if (mounted) setBeatPulse((n) => n + 1);
-      }, time);
-    }, "4n");
-    return () => {
-      mounted = false;
-      Tone.Transport.clear(id);
-    };
-  }, [state]);
-
-  const scale = computeScale(state, level, beatPulse);
-  const ringOpacity = computeRingOpacity(state);
-  const showX = state === "denied";
+export function HumButton({ state, arrangement, size, onClick }: Props) {
+  const hasArr = arrangement !== null;
+  const inner = renderInner(state, arrangement, hasArr);
 
   return (
     <button
       type="button"
-      className="hum-button"
-      aria-label="Press and hold to hum"
-      onPointerDown={(e) => {
-        e.preventDefault();
-        onPressDown();
-      }}
-      onPointerUp={(e) => {
-        e.preventDefault();
-        onPressUp();
-      }}
-      onPointerCancel={(e) => {
-        e.preventDefault();
-        onPressUp();
-      }}
-      onContextMenu={(e) => e.preventDefault()}
+      className={`disc disc--${state}`}
+      style={{ width: size, height: size }}
+      onClick={onClick}
+      aria-label={ariaLabel(state)}
     >
-      <span
-        className={`blob blob--${state}`}
-        style={{
-          width: SIZE_PX,
-          height: SIZE_PX,
-          transform: `scale(${scale.toFixed(3)})`,
-          opacity: ringOpacity,
-        }}
-      >
-        {showX && (
-          <svg
-            className="blob-x"
-            viewBox="0 0 100 100"
-            aria-hidden="true"
-          >
-            <line x1="32" y1="32" x2="68" y2="68" />
-            <line x1="68" y1="32" x2="32" y2="68" />
-          </svg>
-        )}
-      </span>
+      <span className="disc__face" aria-hidden="true" />
+      <span className="disc__inner">{inner}</span>
     </button>
   );
 }
 
-function computeScale(
+function renderInner(
   state: HumButtonState,
-  level: number,
-  beat: number,
-): number {
-  switch (state) {
-    case "idle":
-      // Driven by CSS keyframes; transform here stays neutral.
-      return 1;
-    case "recording":
-      // 0..1 mic level mapped to 1.0..1.18
-      return 1 + Math.min(level, 1) * 0.18;
-    case "processing":
-      // Cheap pseudo-random shimmer derived from time so different mounts diverge
-      return 1 + 0.06 * Math.sin(beat * 1.7 + Date.now() / 220);
-    case "playing":
-      // Beat-driven thump. `beat` increments once per quarter.
-      return 1 + 0.07 * ((beat % 2) === 0 ? 1 : 0.4);
-    case "denied":
-      return 0.92;
+  arr: Arrangement | null,
+  hasArr: boolean,
+) {
+  if (state === "recording") {
+    return (
+      <>
+        <RecordingRings />
+        <div className="disc-stack">
+          <div className="disc-eyebrow">Recording</div>
+          <div className="disc-cue">Tap to stop</div>
+        </div>
+      </>
+    );
   }
+  if (state === "processing") {
+    return (
+      <>
+        <ProcessingArc />
+        <div className="disc-stack">
+          <div className="disc-eyebrow">Listening</div>
+          <ProcessingDots />
+        </div>
+      </>
+    );
+  }
+  if (state === "denied") {
+    return (
+      <div className="disc-stack">
+        <div className="disc-eyebrow">Mic blocked</div>
+        <div className="disc-cue">Tap to retry</div>
+      </div>
+    );
+  }
+  if (hasArr && arr) {
+    return (
+      <div className="disc-stack">
+        <div className="disc-key">{formatKey(arr)}</div>
+        <div className="disc-bpm">
+          {arr.tempo} <span className="disc-bpm__u">BPM</span>
+        </div>
+        <div className="disc-cue">
+          {state === "playing" ? "Tap to pause" : "Tap to play"}
+        </div>
+      </div>
+    );
+  }
+  return (
+    <div className="disc-stack">
+      <div className="disc-eyebrow">Press to record</div>
+      <div className="disc-cue">Hum any melody</div>
+    </div>
+  );
 }
 
-function computeRingOpacity(state: HumButtonState): number {
+function RecordingRings() {
+  return (
+    <span className="rings" aria-hidden="true">
+      <span className="ring ring--1" />
+      <span className="ring ring--2" />
+      <span className="ring ring--3" />
+    </span>
+  );
+}
+
+function ProcessingArc() {
+  return (
+    <svg className="proc-arc" viewBox="0 0 100 100" aria-hidden="true">
+      <circle
+        cx="50"
+        cy="50"
+        r="48"
+        stroke="currentColor"
+        strokeWidth="0.6"
+        fill="none"
+        pathLength="100"
+        strokeDasharray="22 78"
+      />
+    </svg>
+  );
+}
+
+function ProcessingDots() {
+  return (
+    <span className="proc-dots" aria-hidden="true">
+      <span />
+      <span />
+      <span />
+    </span>
+  );
+}
+
+function formatKey(arr: Arrangement): string {
+  const tonic = arr.key.tonic.replace(/#/g, "♯").replace(/b/g, "♭");
+  return `${tonic} ${arr.key.mode}`;
+}
+
+function ariaLabel(state: HumButtonState): string {
   switch (state) {
-    case "idle":
-      return 0.45;
     case "recording":
-      return 0.85;
-    case "processing":
-      return 0.7;
+      return "Stop recording";
     case "playing":
-      return 0.65;
+      return "Pause";
+    case "paused":
+      return "Play";
+    case "processing":
+      return "Processing";
     case "denied":
-      return 0.35;
+      return "Microphone blocked";
+    default:
+      return "Start recording";
   }
 }

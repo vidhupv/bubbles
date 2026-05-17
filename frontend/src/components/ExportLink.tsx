@@ -1,57 +1,71 @@
 /**
- * Bottom-right corner "export.wav" text link.
+ * Export pill — lives in the top-right corner.
  *
- * Only renders when an arrangement exists. Click triggers Tone.Offline render
- * → AudioBuffer → WAV blob → browser download. The render runs at 44.1 kHz
- * stereo for 60 seconds (two 4-bar loops back-to-back) with a 200 ms fade.
+ * States: idle → doing (spinner + "Rendering") → done (check + "Exported")
+ * Returns to idle ~2.3s after rendering finishes.
  */
 import { useState } from "react";
 import * as Tone from "tone";
 import type { Arrangement } from "@shared/types";
 import { renderToWav } from "../audio/export";
+import { Icon } from "./Icon";
+
+type Phase = "idle" | "doing" | "done";
 
 interface Props {
   arrangement: Arrangement | null;
 }
 
 export function ExportLink({ arrangement }: Props) {
-  const [busy, setBusy] = useState(false);
+  const [phase, setPhase] = useState<Phase>("idle");
 
   if (!arrangement) return null;
 
   async function handleClick() {
-    if (!arrangement || busy) return;
-    setBusy(true);
+    if (!arrangement || phase !== "idle") return;
+    setPhase("doing");
     try {
-      // Ensure the AudioContext is unlocked — required even for offline render
-      // to ensure timestamping math is consistent.
       if (Tone.getContext().state !== "running") {
         await Tone.start();
       }
       const blob = await renderToWav(arrangement);
       const url = URL.createObjectURL(blob);
       const a = document.createElement("a");
-      const name = `bubbles-${arrangement.key.tonic}-${arrangement.tempo}bpm-${Date.now()}.wav`;
+      const name = `hummingbird-${arrangement.key.tonic}-${arrangement.tempo}bpm-${Date.now()}.wav`;
       a.href = url;
       a.download = name;
       document.body.appendChild(a);
       a.click();
       a.remove();
       URL.revokeObjectURL(url);
-    } finally {
-      setBusy(false);
+      setPhase("done");
+      window.setTimeout(() => setPhase("idle"), 2300);
+    } catch {
+      setPhase("idle");
     }
   }
 
   return (
     <button
       type="button"
-      className="export-link"
+      className={`export export--${phase}`}
       onClick={handleClick}
-      disabled={busy}
+      disabled={phase !== "idle"}
       aria-label="Export the current arrangement as a WAV file"
     >
-      {busy ? "rendering…" : "export.wav"}
+      {phase === "done" ? (
+        <>
+          <Icon name="check" size={16} /> Exported
+        </>
+      ) : phase === "doing" ? (
+        <>
+          <span className="spinner" /> Rendering
+        </>
+      ) : (
+        <>
+          <Icon name="download" size={16} /> Export
+        </>
+      )}
     </button>
   );
 }

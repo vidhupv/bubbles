@@ -5,10 +5,11 @@
  * of the app can trust their shape.
  */
 
-import type { Arrangement, Drums, Note } from "@shared/types";
+import type { Arrangement, Drums, Guitar, Note } from "@shared/types";
 import {
   ArrangementSchema,
   DrumsSchema,
+  GuitarSchema,
   PitchResultSchema,
 } from "./audio/validate";
 import { z } from "zod";
@@ -71,6 +72,7 @@ export async function refineArrangement(args: {
   intent: string;
   prior: Arrangement | null;
   bpm_hint?: number | null;
+  key_hint?: string | null;
 }): Promise<Arrangement> {
   const r = await fetch("/api/arrange", {
     method: "POST",
@@ -79,4 +81,60 @@ export async function refineArrangement(args: {
   });
   if (!r.ok) await readError(r);
   return ArrangementSchema.parse(await r.json());
+}
+
+const ChordsFromHumResponseSchema = z.object({
+  chord_progression: z.array(z.string()).length(4),
+  guitar: GuitarSchema,
+});
+
+/** POST /chords-from-hum — hum 4 chord roots → chord progression. */
+export async function chordsFromHum(
+  audio: Blob,
+  tonic: string,
+  mode: string,
+): Promise<{ chord_progression: string[]; guitar: Guitar }> {
+  const form = new FormData();
+  form.append("audio", audio, "chords.webm");
+  form.append("tonic", tonic);
+  form.append("mode", mode);
+  const r = await fetch("/api/chords-from-hum", { method: "POST", body: form });
+  if (!r.ok) await readError(r);
+  return ChordsFromHumResponseSchema.parse(await r.json());
+}
+
+// --- Library ---
+
+const LibraryEntrySchema = z.object({
+  id: z.string(),
+  saved_at: z.number(),
+  title: z.string(),
+  arrangement: ArrangementSchema,
+});
+
+export type LibraryEntry = z.infer<typeof LibraryEntrySchema>;
+
+export async function saveToLibrary(
+  arrangement: Arrangement,
+  title?: string,
+): Promise<LibraryEntry> {
+  const r = await fetch("/api/library", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ arrangement, title: title ?? null }),
+  });
+  if (!r.ok) await readError(r);
+  return LibraryEntrySchema.parse(await r.json());
+}
+
+export async function listLibrary(): Promise<LibraryEntry[]> {
+  const r = await fetch("/api/library");
+  if (!r.ok) await readError(r);
+  const body = (await r.json()) as { items: unknown[] };
+  return z.array(LibraryEntrySchema).parse(body.items);
+}
+
+export async function deleteLibrary(id: string): Promise<void> {
+  const r = await fetch(`/api/library/${id}`, { method: "DELETE" });
+  if (!r.ok) await readError(r);
 }

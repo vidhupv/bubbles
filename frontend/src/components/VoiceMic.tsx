@@ -1,50 +1,43 @@
 /**
- * Small push-to-talk mic icon for voice refinement.
+ * "Refine by voice" — pill button toggle.
  *
- * Press-and-hold to speak; release to send transcript. Visual state mirrors
- * the hum button's recording shimmer at smaller scale.
+ * First tap starts listening, button pulses red. Second tap sends the
+ * transcript. Live transcript is shown by the parent below the button.
  */
+import { Icon } from "./Icon";
+
 interface Props {
   listening: boolean;
   supported: boolean;
   disabled: boolean;
-  onPressDown(): void;
-  onPressUp(): void;
+  transcript: string;
+  onToggle(): void;
 }
 
 export function VoiceMic({
   listening,
   supported,
   disabled,
-  onPressDown,
-  onPressUp,
+  transcript,
+  onToggle,
 }: Props) {
   if (!supported) return null;
 
   return (
-    <button
-      type="button"
-      className={`voice-mic ${listening ? "voice-mic--on" : ""}`}
-      aria-label="Press and hold to speak a refinement"
-      disabled={disabled}
-      onPointerDown={(e) => {
-        e.preventDefault();
-        if (!disabled) onPressDown();
-      }}
-      onPointerUp={(e) => {
-        e.preventDefault();
-        onPressUp();
-      }}
-      onPointerCancel={(e) => {
-        e.preventDefault();
-        onPressUp();
-      }}
-    >
-      <svg viewBox="0 0 24 24" aria-hidden="true">
-        <rect x="9" y="3" width="6" height="12" rx="3" />
-        <path d="M5 12a7 7 0 0 0 14 0" />
-        <line x1="12" y1="19" x2="12" y2="22" />
-      </svg>
-    </button>
+    <div className="voice-refine">
+      <button
+        type="button"
+        className={`voice-btn ${listening ? "voice-btn--on" : ""}`}
+        disabled={disabled}
+        onClick={onToggle}
+        aria-label={listening ? "Stop and send refinement" : "Refine by voice"}
+      >
+        <Icon name="mic" size={18} />
+        <span>{listening ? "Listening — tap to send" : "Refine by voice"}</span>
+      </button>
+      {listening && transcript && (
+        <div className="voice-transcript">"{transcript}"</div>
+      )}
+    </div>
   );
 }

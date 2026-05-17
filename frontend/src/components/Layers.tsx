@@ -1,13 +1,15 @@
 /**
- * Layers panel — shows what's currently in the arrangement and lets the user
- * regenerate, remove, or swap instruments per layer.
+ * Layers panel — 5-column row per layer (status dot, name, detail, picker, actions).
  *
- *   Melody   →  always present (it IS the hum). Instrument picker.
- *   Chords   →  shows the progression if present. ↻ / × / instrument picker.
- *   Drums    →  shows the kit name if present. ↻ / × / "● hum" button.
+ *   Melody — always present. Instrument picker. No actions.
+ *   Chords — instrument picker + regen/remove, or + Add when empty.
+ *   Drums  — mic re-hum + regen/remove, or + Add + Hum when empty.
+ *
+ * Status dot toggles client-side mute (does not call the backend).
  */
 import type { Arrangement } from "@shared/types";
 import type { InstrumentId } from "../audio/instruments";
+import { Icon } from "./Icon";
 import { InstrumentPicker } from "./InstrumentPicker";
 
 interface Props {
@@ -18,19 +20,20 @@ interface Props {
   melodyLoading: boolean;
   chordLoading: boolean;
   drumsRecording: boolean;
+  chordsRecording: boolean;
+  muted: { melody: boolean; chords: boolean; drums: boolean };
+  onToggleMute(layer: "melody" | "chords" | "drums"): void;
   onMelodyInstrumentChange(id: InstrumentId): void;
   onChordInstrumentChange(id: InstrumentId): void;
   onRegenerateChords(): void;
   onRemoveChords(): void;
   onAddChords(): void;
+  onToggleHumChords(): void;
   onRegenerateDrums(): void;
   onRemoveDrums(): void;
   onAddDrums(): void;
-  onHumDrumsPressDown(): void;
-  onHumDrumsPressUp(): void;
+  onToggleHumDrums(): void;
 }
-
-const PITCH_NAMES = ["C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "B"];
 
 export function Layers(props: Props) {
   const {
@@ -41,28 +44,35 @@ export function Layers(props: Props) {
     melodyLoading,
     chordLoading,
     drumsRecording,
+    chordsRecording,
+    muted,
+    onToggleMute,
     onMelodyInstrumentChange,
     onChordInstrumentChange,
     onRegenerateChords,
     onRemoveChords,
     onAddChords,
+    onToggleHumChords,
     onRegenerateDrums,
     onRemoveDrums,
     onAddDrums,
-    onHumDrumsPressDown,
-    onHumDrumsPressUp,
+    onToggleHumDrums,
   } = props;
 
   const hasChords = arrangement.chord_progression.length > 0;
   const hasDrums = arrangement.drums !== null;
 
   return (
-    <section className="layers" aria-label="Arrangement layers">
-      <div className="layers__row">
-        <span className="layers__dot" aria-hidden="true">●</span>
-        <span className="layers__name">melody</span>
-        <span className="layers__detail">{summarizeMelody(arrangement)}</span>
-        <span className="layers__instrument">
+    <section className="layers" aria-label="Layers">
+      <Row
+        name="Melody"
+        present
+        muted={muted.melody}
+        detail={summarizeMelody(arrangement)}
+        disabled={disabled}
+        onToggleMute={() => onToggleMute("melody")}
+      >
+        <span className="row__instr">
           <InstrumentPicker
             value={melodyInstrument}
             loading={melodyLoading}
@@ -70,16 +80,18 @@ export function Layers(props: Props) {
             onChange={onMelodyInstrumentChange}
           />
         </span>
-        <span className="layers__actions" />
-      </div>
+        <span className="row__actions" />
+      </Row>
 
-      <div className={`layers__row ${hasChords ? "" : "layers__row--empty"}`}>
-        <span className="layers__dot" aria-hidden="true">{hasChords ? "●" : "○"}</span>
-        <span className="layers__name">chords</span>
-        <span className="layers__detail">
-          {hasChords ? arrangement.chord_progression.join(" · ") : "—"}
-        </span>
-        <span className="layers__instrument">
+      <Row
+        name="Chords"
+        present={hasChords}
+        muted={muted.chords}
+        detail={hasChords ? arrangement.chord_progression.join(" · ") : null}
+        disabled={disabled}
+        onToggleMute={() => onToggleMute("chords")}
+      >
+        <span className="row__instr">
           {hasChords && (
             <InstrumentPicker
               value={chordInstrument}
@@ -89,144 +101,179 @@ export function Layers(props: Props) {
             />
           )}
         </span>
-        <span className="layers__actions">
+        <span className="row__actions">
           {hasChords ? (
             <>
               <button
                 type="button"
-                className="layers__btn"
+                className={`icon-btn ${chordsRecording ? "icon-btn--rec" : ""}`}
+                disabled={disabled}
+                onClick={onToggleHumChords}
+                aria-label={chordsRecording ? "Stop humming chords" : "Hum chord roots"}
+                title={chordsRecording ? "Stop" : "Hum chord roots"}
+              >
+                <Icon name="mic" size={16} />
+              </button>
+              <button
+                type="button"
+                className="icon-btn"
                 disabled={disabled}
                 onClick={onRegenerateChords}
                 aria-label="Regenerate chords"
                 title="Regenerate"
               >
-                ↻
+                <Icon name="regen" size={16} />
               </button>
               <button
                 type="button"
-                className="layers__btn"
+                className="icon-btn"
                 disabled={disabled}
                 onClick={onRemoveChords}
                 aria-label="Remove chords"
                 title="Remove"
               >
-                ×
+                <Icon name="x" size={16} />
               </button>
             </>
           ) : (
-            <button
-              type="button"
-              className="layers__add"
-              disabled={disabled}
-              onClick={onAddChords}
-            >
-              + add
-            </button>
+            <>
+              <button
+                type="button"
+                className="ghost-btn"
+                disabled={disabled}
+                onClick={onAddChords}
+              >
+                <Icon name="plus" size={14} /> Add
+              </button>
+              <button
+                type="button"
+                className={`ghost-btn ${chordsRecording ? "ghost-btn--rec" : ""}`}
+                disabled={disabled}
+                onClick={onToggleHumChords}
+              >
+                <Icon name="mic" size={14} /> {chordsRecording ? "Stop" : "Hum"}
+              </button>
+            </>
           )}
         </span>
-      </div>
+      </Row>
 
-      <div className={`layers__row ${hasDrums ? "" : "layers__row--empty"}`}>
-        <span className="layers__dot" aria-hidden="true">{hasDrums ? "●" : "○"}</span>
-        <span className="layers__name">drums</span>
-        <span className="layers__detail">
-          {hasDrums ? `${arrangement.drums!.kit} kit` : "—"}
-        </span>
-        <span className="layers__instrument" />
-        <span className="layers__actions">
+      <Row
+        name="Drums"
+        present={hasDrums}
+        muted={muted.drums}
+        detail={hasDrums ? `${arrangement.drums!.kit} kit` : null}
+        disabled={disabled}
+        onToggleMute={() => onToggleMute("drums")}
+      >
+        <span className="row__instr" />
+        <span className="row__actions">
           {hasDrums ? (
             <>
               <button
                 type="button"
-                className="layers__btn"
+                className={`icon-btn ${drumsRecording ? "icon-btn--rec" : ""}`}
+                disabled={disabled}
+                onClick={onToggleHumDrums}
+                aria-label={drumsRecording ? "Stop humming drums" : "Hum drums"}
+                title={drumsRecording ? "Stop" : "Hum drums"}
+              >
+                <Icon name="mic" size={16} />
+              </button>
+              <button
+                type="button"
+                className="icon-btn"
                 disabled={disabled}
                 onClick={onRegenerateDrums}
                 aria-label="Regenerate drums"
                 title="Regenerate with AI"
               >
-                ↻
+                <Icon name="regen" size={16} />
               </button>
               <button
                 type="button"
-                className={`layers__btn ${drumsRecording ? "layers__btn--rec" : ""}`}
-                disabled={disabled}
-                onPointerDown={(e) => {
-                  e.preventDefault();
-                  onHumDrumsPressDown();
-                }}
-                onPointerUp={(e) => {
-                  e.preventDefault();
-                  onHumDrumsPressUp();
-                }}
-                onPointerCancel={(e) => {
-                  e.preventDefault();
-                  onHumDrumsPressUp();
-                }}
-                aria-label="Hum drums (press and hold)"
-                title="Hum drums"
-              >
-                ◉
-              </button>
-              <button
-                type="button"
-                className="layers__btn"
+                className="icon-btn"
                 disabled={disabled}
                 onClick={onRemoveDrums}
                 aria-label="Remove drums"
                 title="Remove"
               >
-                ×
+                <Icon name="x" size={16} />
               </button>
             </>
           ) : (
-            <span style={{ display: "flex", gap: "0.5rem" }}>
+            <>
               <button
                 type="button"
-                className="layers__add"
+                className="ghost-btn"
                 disabled={disabled}
                 onClick={onAddDrums}
               >
-                + AI
+                <Icon name="plus" size={14} /> Add
               </button>
               <button
                 type="button"
-                className={`layers__add ${drumsRecording ? "layers__add--rec" : ""}`}
+                className={`ghost-btn ${drumsRecording ? "ghost-btn--rec" : ""}`}
                 disabled={disabled}
-                onPointerDown={(e) => {
-                  e.preventDefault();
-                  onHumDrumsPressDown();
-                }}
-                onPointerUp={(e) => {
-                  e.preventDefault();
-                  onHumDrumsPressUp();
-                }}
-                onPointerCancel={(e) => {
-                  e.preventDefault();
-                  onHumDrumsPressUp();
-                }}
-                title="Press and hold to beatbox a drum pattern"
+                onClick={onToggleHumDrums}
               >
-                ◉ hum
+                <Icon name="mic" size={14} /> {drumsRecording ? "Stop" : "Hum"}
               </button>
-            </span>
+            </>
           )}
         </span>
-      </div>
+      </Row>
     </section>
+  );
+}
+
+interface RowProps {
+  name: string;
+  present: boolean;
+  muted: boolean;
+  detail: string | null;
+  disabled: boolean;
+  onToggleMute(): void;
+  children: React.ReactNode;
+}
+
+function Row({
+  name,
+  present,
+  muted,
+  detail,
+  disabled,
+  onToggleMute,
+  children,
+}: RowProps) {
+  return (
+    <div
+      className={`row ${present ? "row--on" : "row--off"} ${muted ? "row--muted" : ""}`}
+    >
+      <button
+        type="button"
+        className="row__status"
+        onClick={onToggleMute}
+        disabled={!present || disabled}
+        aria-label={muted ? `Unmute ${name}` : `Mute ${name}`}
+      >
+        <span className="row__status-dot" />
+      </button>
+      <div className="row__name">{name}</div>
+      <div className="row__detail">
+        {present && detail ? (
+          detail
+        ) : (
+          <span className="row__detail-empty">—</span>
+        )}
+      </div>
+      {children}
+    </div>
   );
 }
 
 function summarizeMelody(arr: Arrangement): string {
   const n = arr.melody.length;
   if (n === 0) return "—";
-  const tonic = arr.key.tonic;
-  if (arr.melody.length === 0) return `${n} notes`;
-  const midis = arr.melody.map((m) => m.midi);
-  const lo = Math.min(...midis);
-  const hi = Math.max(...midis);
-  const range =
-    lo === hi
-      ? `${PITCH_NAMES[lo % 12]}${Math.floor(lo / 12) - 1}`
-      : `${PITCH_NAMES[lo % 12]}${Math.floor(lo / 12) - 1}–${PITCH_NAMES[hi % 12]}${Math.floor(hi / 12) - 1}`;
-  return `${n} notes · ${tonic} ${arr.key.mode} · ${range}`;
+  return `${n} notes`;
 }

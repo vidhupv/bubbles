@@ -36,22 +36,22 @@ describe("planEvents — melody only", () => {
 });
 
 describe("planEvents — chords opt-in", () => {
-  it("emits two chord-pad strums per bar when chord_progression is non-empty", () => {
+  it("emits chord-pad strums per the guitar.rhythm DSL", () => {
+    // FULL_ARRANGEMENT uses rhythm "x..............." → 1 strum per bar × 4 bars.
     const { events } = planEvents(FULL_ARRANGEMENT);
     const padEvents = events.filter((e) => e.target === "chord-pad");
-    // 4 bars × 2 half-note strums = 8.
-    expect(padEvents).toHaveLength(8);
+    expect(padEvents).toHaveLength(4);
   });
 
   it("rotates chord_progression by bar", () => {
     const { events } = planEvents(FULL_ARRANGEMENT);
     const pads = events.filter((e) => e.target === "chord-pad");
     // Am F C G in MIDI: 57/60/64, 53/57/60, 48/52/55, 55/59/62.
-    // Two strums per bar, same chord both times.
-    expect(pads[0].notes).toEqual([57, 60, 64]);
-    expect(pads[1].notes).toEqual([57, 60, 64]);
-    expect(pads[2].notes).toEqual([53, 57, 60]);
-    expect(pads[6].notes).toEqual([55, 59, 62]);
+    // One strum per bar — bar i plays chord i.
+    expect(pads[0].notes).toEqual([57, 60, 64]); // Am
+    expect(pads[1].notes).toEqual([53, 57, 60]); // F
+    expect(pads[2].notes).toEqual([48, 52, 55]); // C
+    expect(pads[3].notes).toEqual([55, 59, 62]); // G
   });
 
   it("does NOT emit chord pads when chord_progression is empty", () => {

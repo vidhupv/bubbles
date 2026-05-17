@@ -14,14 +14,18 @@ from __future__ import annotations
 
 import logging
 
-from fastapi import FastAPI, File, HTTPException, UploadFile
+from fastapi import FastAPI, File, Form, HTTPException, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 
 from app.arrange import agent_refine, build_melody_only_arrangement
+from app.chords import detect_chord_progression
 from app.drums import detect_drum_pattern_from_bytes
+from app.library import delete as library_delete
+from app.library import list_all as library_list
+from app.library import save as library_save
 from app.pitch import detect_pitch_from_bytes
-from app.schemas import Arrangement, Drums, Note, PitchResult
+from app.schemas import Arrangement, Drums, Guitar, Note, PitchResult
 
 logging.basicConfig(
     level=logging.INFO,
@@ -96,8 +100,13 @@ async def arrange_from_hum(audio: UploadFile = File(...)) -> Arrangement:
             status_code=422,
             detail="No clear melody detected. Try humming a steady pitch.",
         )
-    log.info("/arrange-from-hum: %d notes, %.1f BPM", len(pitch.notes), pitch.bpm)
-    return build_melody_only_arrangement(pitch.notes, bpm=pitch.bpm)
+    log.info(
+        "/arrange-from-hum: %d notes, %.1f BPM, key=%s",
+        len(pitch.notes), pitch.bpm, pitch.key_estimate,
+    )
+    return build_melody_only_arrangement(
+        pitch.notes, bpm=pitch.bpm, key_estimate=pitch.key_estimate
+    )
 
 
 class ArrangeRequest(BaseModel):
@@ -105,6 +114,7 @@ class ArrangeRequest(BaseModel):
     intent: str
     prior: Arrangement | None = None
     bpm_hint: float | None = None
+    key_hint: str | None = None
 
 
 class DrumsFromHumResponse(BaseModel):
@@ -141,6 +151,74 @@ async def drums_from_hum(audio: UploadFile = File(...)) -> DrumsFromHumResponse:
     return DrumsFromHumResponse(drums=Drums(kit="rock", pattern=pattern), tempo=tempo)
 
 
+class ChordsFromHumResponse(BaseModel):
+    chord_progression: list[str]
+    guitar: Guitar
+
+
+@app.post("/chords-from-hum", response_model=ChordsFromHumResponse)
+async def chords_from_hum(
+    audio: UploadFile = File(...),
+    tonic: str = Form("A"),
+    mode: str = Form("minor"),
+) -> ChordsFromHumResponse:
+    """Hum 4 chord roots → chord progression.
+
+    The client passes the current melody's tonic + mode so we can apply
+    diatonic chord qualities. No Claude call.
+    """
+    audio_bytes = await audio.read()
+    suffix = _read_audio(audio, audio_bytes)
+    try:
+        symbols, _bpm = detect_chord_progression(
+            audio_bytes, suffix=suffix, tonic=tonic, mode=mode,
+        )
+    except Exception as exc:
+        log.exception("Chord detection failed")
+        raise HTTPException(
+            status_code=500,
+            detail=f"Chord detection failed: {exc.__class__.__name__}",
+        ) from exc
+
+    if len(symbols) != 4:
+        raise HTTPException(
+            status_code=422,
+            detail="Couldn't pick out 4 chord roots from that hum. Try humming "
+            "4 distinct sustained notes, one per chord.",
+        )
+
+    guitar = Guitar(
+        voicing="open-strum",
+        rhythm="x.x.x.x.x.x.x.x.",
+        sample_set="acoustic",
+    )
+    return ChordsFromHumResponse(chord_progression=symbols, guitar=guitar)
+
+
+class SaveLibraryRequest(BaseModel):
+    arrangement: Arrangement
+    title: str | None = None
+
+
+@app.post("/library")
+async def library_save_endpoint(req: SaveLibraryRequest) -> dict:
+    """Save an arrangement to the local taste library."""
+    return library_save(req.arrangement, req.title)
+
+
+@app.get("/library")
+async def library_list_endpoint() -> dict:
+    return {"items": library_list()}
+
+
+@app.delete("/library/{entry_id}")
+async def library_delete_endpoint(entry_id: str) -> dict:
+    removed = library_delete(entry_id)
+    if not removed:
+        raise HTTPException(status_code=404, detail="Library entry not found.")
+    return {"deleted": entry_id}
+
+
 @app.post("/arrange", response_model=Arrangement)
 async def arrange_endpoint(req: ArrangeRequest) -> Arrangement:
     """Refine an Arrangement using a free-form intent. Calls Claude.
@@ -155,7 +233,13 @@ async def arrange_endpoint(req: ArrangeRequest) -> Arrangement:
     if not req.intent.strip():
         raise HTTPException(status_code=400, detail="intent is required.")
     try:
-        return await agent_refine(req.notes, req.intent, req.prior, req.bpm_hint)
+        return await agent_refine(
+            req.notes,
+            req.intent,
+            req.prior,
+            bpm_hint=req.bpm_hint,
+            key_hint=req.key_hint,
+        )
     except Exception as exc:
         log.exception("Arrangement failed")
         raise HTTPException(

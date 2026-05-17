@@ -56,21 +56,29 @@ export function planEvents(arrangement: Arrangement): PlanResult {
     });
   }
 
-  // 2. CHORDS — opt-in. Half-note strum, two strums per bar, on its own
-  // soft pad voice. Each chord rings ~half a bar so the user clearly hears
-  // both the melody and the chord underneath.
+  // 2. CHORDS — opt-in. Use Claude's guitar.rhythm pattern so the strum
+  // feel matches the agent's stated rhythmic intent. Falls back to a steady
+  // eighth-note strum if no rhythm is set.
   if (arrangement.chord_progression.length > 0) {
     const chordMidis = arrangement.chord_progression.map(chordToMidi);
-    const halfBar = barSeconds / 2;
+    const rhythmDsl = arrangement.guitar?.rhythm ?? "x.x.x.x.x.x.x.x.";
+    let rhythmSteps;
+    try {
+      rhythmSteps = parsePattern(rhythmDsl);
+    } catch {
+      rhythmSteps = parsePattern("x.x.x.x.x.x.x.x.");
+    }
     for (let bar = 0; bar < TOTAL_BARS; bar++) {
       const chord = chordMidis[bar % chordMidis.length];
-      for (let h = 0; h < 2; h++) {
+      for (let i = 0; i < BAR_STEPS; i++) {
+        const step = rhythmSteps[i];
+        if (step.kind !== "hit") continue;
         events.push({
-          time: bar * barSeconds + h * halfBar,
+          time: bar * barSeconds + i * stepSeconds,
           target: "chord-pad",
           notes: chord,
-          velocity: 0.55,
-          duration: halfBar * 0.9,
+          velocity: step.velocity * 0.7,
+          duration: stepSeconds * 4, // ring for one beat
         });
       }
     }
@@ -108,12 +116,28 @@ export interface PlaybackHandle {
   stop(): void;
 }
 
-export function play(arrangement: Arrangement, instr: Instruments): PlaybackHandle {
+export interface PlayOptions {
+  /** Keep Tone.Transport at its current position. Use this when swapping
+   *  arrangements in-place (e.g. removing a layer) so the loop doesn't
+   *  jump back to bar 1. */
+  keepPosition?: boolean;
+}
+
+export function play(
+  arrangement: Arrangement,
+  instr: Instruments,
+  options: PlayOptions = {},
+): PlaybackHandle {
   const { events, loopSeconds } = planEvents(arrangement);
 
-  Tone.Transport.stop();
-  Tone.Transport.cancel(0);
-  Tone.Transport.position = 0;
+  if (!options.keepPosition) {
+    Tone.Transport.stop();
+    Tone.Transport.cancel(0);
+    Tone.Transport.position = 0;
+  } else {
+    // Cancel only pending events, not the position.
+    Tone.Transport.cancel(Tone.Transport.seconds);
+  }
   Tone.Transport.bpm.value = arrangement.tempo;
 
   const part = new Tone.Part<PlannedEvent>((time, ev) => {
@@ -123,7 +147,10 @@ export function play(arrangement: Arrangement, instr: Instruments): PlaybackHand
   part.loop = true;
   part.loopEnd = loopSeconds;
   part.start(0);
-  Tone.Transport.start();
+
+  if (Tone.Transport.state !== "started") {
+    Tone.Transport.start();
+  }
 
   return {
     stop() {
@@ -147,8 +174,14 @@ function fire(instr: Instruments, ev: PlannedEvent, time: number): void {
       instr.drums.hat.triggerAttackRelease("C5", ev.duration, time, ev.velocity);
       return;
     case "melody": {
+      // Sampler-based voices handle chord arrays fine; PluckSynth is mono.
+      // Hum melody is monophonic, but the array form works for both.
       const names = ev.notes.map(midiToNoteName);
-      instr.melody.triggerAttackRelease(names, ev.duration, time, ev.velocity);
+      if (names.length === 1) {
+        instr.melody.triggerAttackRelease(names[0], ev.duration, time, ev.velocity);
+      } else {
+        instr.melody.triggerAttackRelease(names, ev.duration, time, ev.velocity);
+      }
       return;
     }
     case "chord-pad": {

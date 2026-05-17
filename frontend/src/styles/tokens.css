@@ -1,29 +1,32 @@
-/* Design tokens — locked in /plan-design-review (D2).
- * Editorial display + warm dark mode + single warm accent.
+/* Design tokens — Hummingbird cream & gold palette.
+ * Single light palette, Inter + Newsreader typography.
  */
 
-@import url("https://fonts.googleapis.com/css2?family=Fraunces:ital,opsz,wght@0,9..144,300;0,9..144,400;0,9..144,500;1,9..144,300;1,9..144,400&family=JetBrains+Mono:wght@400;500&display=swap");
+@import url("https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=Newsreader:wght@400;500&display=swap");
 
 :root {
-  color-scheme: dark;
+  color-scheme: light;
 
   /* Color */
-  --bg: #0f0e0d;
-  --bg-elevated: #1a1817;
-  --fg: #f4f0ea;
-  --fg-muted: rgba(244, 240, 234, 0.55);
-  --fg-dim: rgba(244, 240, 234, 0.32);
-  --accent: #d4892f; /* amber — locked in design review */
-  --accent-soft: rgba(212, 137, 47, 0.18);
-  --danger: #c8553d;
+  --bg: #f4eedf;
+  --bg-soft: #ede4ce;
+  --bg-elev: #fbf6e8;
+  --ink: #1f1812;
+  --ink-soft: rgba(31, 24, 18, 0.66);
+  --ink-mute: rgba(31, 24, 18, 0.42);
+  --ink-faint: rgba(31, 24, 18, 0.2);
+  --ink-hair: rgba(31, 24, 18, 0.1);
+  --accent: #b0884a;
+  --accent-deep: #8a6b38;
+  --accent-soft: rgba(176, 136, 74, 0.14);
+  --danger: #a8463a;
 
   /* Typography */
-  --font-display: "Fraunces", "Newsreader", Georgia, serif;
-  --font-mono: "JetBrains Mono", ui-monospace, SFMono-Regular, monospace;
+  --font-sans: "Inter", system-ui, -apple-system, sans-serif;
+  --font-serif: "Newsreader", "Inter", Georgia, serif;
 
   /* Motion */
   --ease-out: cubic-bezier(0.16, 1, 0.3, 1);
-  --ease-in: cubic-bezier(0.6, 0, 1, 0.4);
 
   /* Spacing */
   --space-1: 0.25rem;
@@ -45,9 +48,13 @@ body {
   margin: 0;
   padding: 0;
   background: var(--bg);
-  color: var(--fg);
-  font-family: var(--font-display);
+  color: var(--ink);
+  font-family: var(--font-sans);
+  font-size: 16px;
   font-weight: 400;
+  line-height: 1.5;
+  letter-spacing: -0.005em;
+  font-feature-settings: "ss01", "cv11";
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
   text-rendering: optimizeLegibility;
@@ -72,10 +79,10 @@ button {
 button:focus-visible {
   outline: 2px solid var(--accent);
   outline-offset: 4px;
-  border-radius: 2px;
+  border-radius: 4px;
 }
 
 ::selection {
-  background: var(--accent);
-  color: var(--bg);
+  background: var(--accent-soft);
+  color: var(--ink);
 }
