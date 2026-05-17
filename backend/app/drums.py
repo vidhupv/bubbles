@@ -15,6 +15,7 @@ Returns a DrumPattern (three 16-step strings) plus the detected tempo.
 from __future__ import annotations
 
 import logging
+import subprocess
 import tempfile
 from pathlib import Path
 
@@ -40,8 +41,14 @@ def detect_drum_pattern_from_bytes(
     audio_bytes: bytes, suffix: str = ".wav"
 ) -> tuple[DrumPattern, float]:
     """Returns (pattern, tempo_bpm)."""
-    with tempfile.NamedTemporaryFile(suffix=suffix, delete=False) as tmp:
-        tmp.write(audio_bytes)
+    # Always transcode via ffmpeg first. Browser audio is webm/opus, which
+    # librosa's libsndfile-then-audioread fallback decodes inconsistently
+    # (it works for basic-pitch's internal call path but raises NoBackendError
+    # for ours). ffmpeg is a hard prerequisite of the project anyway.
+    wav_bytes = _to_wav_bytes(audio_bytes, suffix)
+
+    with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as tmp:
+        tmp.write(wav_bytes)
         tmp_path = Path(tmp.name)
 
     try:
@@ -152,3 +159,39 @@ def _collapse_to_one_bar(four_bars: bytearray) -> str:
 
 def _empty_pattern() -> DrumPattern:
     return DrumPattern(kick="." * 16, snare="." * 16, hat="." * 16)
+
+
+def _to_wav_bytes(audio_bytes: bytes, suffix: str) -> bytes:
+    """Transcode any input audio container to mono 22050Hz 16-bit PCM WAV via ffmpeg.
+
+    Browser MediaRecorder emits webm/opus (Chrome) or mp4/aac (Safari). Both
+    fail librosa's libsndfile path. ffmpeg is reliable for all of these.
+    """
+    with tempfile.NamedTemporaryFile(suffix=suffix, delete=False) as src:
+        src.write(audio_bytes)
+        src_path = Path(src.name)
+    dst_path = src_path.with_suffix(src_path.suffix + ".wav")
+
+    try:
+        proc = subprocess.run(
+            [
+                "ffmpeg",
+                "-y",  # overwrite without prompting
+                "-loglevel", "error",
+                "-i", str(src_path),
+                "-ac", "1",
+                "-ar", str(_SR),
+                "-acodec", "pcm_s16le",
+                str(dst_path),
+            ],
+            capture_output=True,
+            check=False,
+            timeout=15,
+        )
+        if proc.returncode != 0:
+            err = proc.stderr.decode("utf-8", errors="replace").strip()
+            raise RuntimeError(f"ffmpeg transcode failed: {err[:300]}")
+        return dst_path.read_bytes()
+    finally:
+        src_path.unlink(missing_ok=True)
+        dst_path.unlink(missing_ok=True)
