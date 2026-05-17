@@ -37,6 +37,7 @@ import { Icon } from "./components/Icon";
 import { Layers } from "./components/Layers";
 import { Library } from "./components/Library";
 import { MobileFallback } from "./components/MobileFallback";
+import { PlaybackControls } from "./components/PlaybackControls";
 import { RationaleChat } from "./components/RationaleChat";
 import { VoiceMic } from "./components/VoiceMic";
 import { useHumDrums } from "./hooks/useHumDrums";
@@ -208,6 +209,28 @@ export function App() {
     if (phase === "processing" || phase === "recording") return;
     await startRecording();
   }, [phase, startRecording]);
+
+  const togglePlayPause = useCallback(() => {
+    if (!arrangement) return;
+    if (phase === "playing") {
+      Tone.Transport.pause();
+      setPhase("paused");
+    } else if (phase === "paused" || phase === "idle") {
+      // If no Part is alive, build one; otherwise just resume.
+      if (!playbackRef.current) {
+        void renderArrangement(arrangement);
+      } else {
+        Tone.Transport.start();
+      }
+      setPhase("playing");
+    }
+  }, [arrangement, phase, renderArrangement]);
+
+  const restartArrangement = useCallback(async () => {
+    if (!arrangement) return;
+    await renderArrangement(arrangement);
+    setPhase("playing");
+  }, [arrangement, renderArrangement]);
 
   /** Tool-routing layer.
    *
@@ -518,6 +541,16 @@ export function App() {
           size={discSize}
           onClick={onDiscClick}
         />
+
+        {hasArrangement && (
+          <PlaybackControls
+            playing={phase === "playing"}
+            paused={phase === "paused"}
+            disabled={processing || phase === "recording"}
+            onPlayPause={togglePlayPause}
+            onRestart={restartArrangement}
+          />
+        )}
 
         {hasArrangement && (
           <div className="hum-again">

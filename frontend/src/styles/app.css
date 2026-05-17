@@ -882,3 +882,49 @@ button.library__delete:hover {
   font-size: 14px;
   margin-top: var(--space-2);
 }
+
+/* ============================================================ */
+/* Playback bar (pause / play / restart)                        */
+/* ============================================================ */
+
+.playback-bar {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px;
+  border-radius: 999px;
+  background: var(--bg-elev);
+  border: 1px solid var(--ink-hair);
+}
+
+button.playback-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-family: var(--font-sans);
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--ink);
+  padding: 6px 14px;
+  border-radius: 999px;
+  background: transparent;
+  transition: background 160ms ease, color 160ms ease;
+}
+
+button.playback-pill:hover:not(:disabled) {
+  background: var(--bg-soft);
+}
+
+button.playback-pill--ghost {
+  color: var(--ink-soft);
+  padding: 6px 10px;
+}
+
+button.playback-pill--ghost:hover:not(:disabled) {
+  color: var(--accent-deep);
+}
+
+button.playback-pill:disabled {
+  opacity: 0.35;
+  cursor: not-allowed;
+}
