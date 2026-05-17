@@ -19,6 +19,7 @@ import {
   refineArrangement,
   saveToLibrary,
 } from "./api";
+import { nudgeTempo, transposeArrangement } from "./audio/edit";
 import type { InstrumentId } from "./audio/instruments";
 import { play, type PlaybackHandle } from "./audio/renderer";
 import {
@@ -29,6 +30,7 @@ import {
   type Instruments,
 } from "./audio/sampler";
 import { Brand } from "./components/Brand";
+import { EditorControls } from "./components/EditorControls";
 import { ExportLink } from "./components/ExportLink";
 import { HumButton, type HumButtonState } from "./components/HumButton";
 import { Icon } from "./components/Icon";
@@ -207,10 +209,59 @@ export function App() {
     await startRecording();
   }, [phase, startRecording]);
 
+  /** Tool-routing layer.
+   *
+   *  The voice agent dispatches free-form intents to client-side tools
+   *  (transpose, nudgeTempo) before falling back to the Claude API. This
+   *  saves a network round-trip on common edits AND keeps the
+   *  determinism the user expects for explicit commands. Anything that
+   *  doesn't map to a local tool flows to /arrange so Claude can
+   *  reinterpret musically.
+   */
+  const tryLocalTool = useCallback(
+    (intent: string, arr: Arrangement): Arrangement | null => {
+      const text = intent.toLowerCase();
+      // Transpose: "transpose up 2", "up 2 semitones", "down a half-step",
+      // "shift up an octave", etc.
+      const transposeMatch =
+        /(?:transpose|shift|move|pitch)\s+(up|down|higher|lower)\s+(?:by\s+)?(\d+|an?\s+octave|a?\s*half[- ]?step)/.exec(text) ??
+        /^(up|down|higher|lower)\s+(\d+|an?\s+octave|a?\s*half[- ]?step)/.exec(text);
+      if (transposeMatch) {
+        const dir = /up|higher/.test(transposeMatch[1]) ? 1 : -1;
+        const amt = transposeMatch[2];
+        let semis = 1;
+        if (/octave/.test(amt)) semis = 12;
+        else if (/half/.test(amt)) semis = 1;
+        else semis = parseInt(amt, 10) || 1;
+        return transposeArrangement(arr, dir * semis);
+      }
+      // Tempo nudges: "faster", "slower", "speed up", "slow down", "X bpm"
+      const tempoMatch = /(\d+)\s*bpm/.exec(text);
+      if (tempoMatch) {
+        const target = parseInt(tempoMatch[1], 10);
+        return nudgeTempo(arr, target - arr.tempo);
+      }
+      if (/faster|speed\s*up|quicker/.test(text)) return nudgeTempo(arr, 8);
+      if (/slower|slow\s*down|relax/.test(text)) return nudgeTempo(arr, -8);
+      return null;
+    },
+    [],
+  );
+
   const refine = useCallback(
     async (intent: string) => {
       if (!arrangement) return;
       setErrorMsg(null);
+
+      // Agentic fast path: try client-side tools first.
+      const local = tryLocalTool(intent, arrangement);
+      if (local) {
+        setArrangement(local);
+        await swapArrangement(local);
+        setPhase("playing");
+        return;
+      }
+
       setPhase("processing");
       try {
         const next = await refineArrangement({
@@ -227,6 +278,28 @@ export function App() {
         setPhase("playing");
         setErrorMsg(humanizeError(err));
       }
+    },
+    [arrangement, swapArrangement, tryLocalTool],
+  );
+
+  const handleTranspose = useCallback(
+    async (semitones: number) => {
+      if (!arrangement) return;
+      const next = transposeArrangement(arrangement, semitones);
+      setArrangement(next);
+      await swapArrangement(next);
+      setPhase("playing");
+    },
+    [arrangement, swapArrangement],
+  );
+
+  const handleTempoNudge = useCallback(
+    async (delta: number) => {
+      if (!arrangement) return;
+      const next = nudgeTempo(arrangement, delta);
+      setArrangement(next);
+      await swapArrangement(next);
+      setPhase("playing");
     },
     [arrangement, swapArrangement],
   );
@@ -527,6 +600,15 @@ export function App() {
               Simpler
             </button>
           </div>
+        )}
+
+        {hasArrangement && arrangement && (
+          <EditorControls
+            disabled={processing}
+            tempo={arrangement.tempo}
+            onTranspose={handleTranspose}
+            onTempo={handleTempoNudge}
+          />
         )}
 
         {hasArrangement && (
