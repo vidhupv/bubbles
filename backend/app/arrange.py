@@ -20,12 +20,6 @@ import re
 from collections import Counter
 from typing import Any
 
-from claude_agent_sdk import (
-    AssistantMessage,
-    ClaudeAgentOptions,
-    TextBlock,
-    query,
-)
 from pydantic import ValidationError
 
 from app.schemas import (
@@ -43,8 +37,7 @@ _PITCH_CLASSES = ["C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "B
 # Default BPM when the hum has no clear rhythm to estimate from.
 _DEFAULT_BPM = 90
 
-_AGENT_OPTIONS = ClaudeAgentOptions(
-    system_prompt=(
+_SYSTEM_PROMPT = (
         "You are Bubbles, an AI session musician. The user has hummed a melody "
         "and now wants accompaniment that supports THEIR melody. You DO NOT "
         "invent the melody — it stays exactly as hummed.\n\n"
@@ -81,11 +74,19 @@ _AGENT_OPTIONS = ClaudeAgentOptions(
         "- For 'make it sadder' / 'heavier' / etc., adjust mode/tempo/chord "
         "choices; keep other layers as-is.\n"
         "Be conservative. Don't add layers the user didn't ask for."
-    ),
-    allowed_tools=[],
-    max_turns=1,
-    permission_mode="bypassPermissions",
 )
+
+
+def _agent_options() -> "ClaudeAgentOptions":  # noqa: F821 — lazy import
+    """Build options lazily so tests can import this module without the SDK."""
+    from claude_agent_sdk import ClaudeAgentOptions
+
+    return ClaudeAgentOptions(
+        system_prompt=_SYSTEM_PROMPT,
+        allowed_tools=[],
+        max_turns=1,
+        permission_mode="bypassPermissions",
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -166,8 +167,13 @@ async def agent_refine(
 
 
 async def _query_agent(prompt: str) -> str:
+    # Lazy import — the SDK's transport setup can stall test runners when
+    # imported at module level. Defer until we actually need to call out.
+    from claude_agent_sdk import AssistantMessage, TextBlock, query
+
+    options = _agent_options()
     chunks: list[str] = []
-    async for message in query(prompt=prompt, options=_AGENT_OPTIONS):
+    async for message in query(prompt=prompt, options=options):
         if isinstance(message, AssistantMessage):
             for block in message.content:
                 if isinstance(block, TextBlock):

@@ -49,7 +49,8 @@ def detect_drum_pattern_from_bytes(
     finally:
         tmp_path.unlink(missing_ok=True)
 
-    if y.size == 0:
+    if y.size == 0 or float(np.max(np.abs(y))) < 1e-3:
+        # Pure silence — librosa.beat.beat_track can spin on this. Short-circuit.
         return _empty_pattern(), 90.0
 
     # Onset detection — `backtrack=True` aligns to the energy floor so the
@@ -58,7 +59,7 @@ def detect_drum_pattern_from_bytes(
         y=y, sr=sr, units="frames", backtrack=True
     )
     if onset_frames.size == 0:
-        return _empty_pattern(), _safe_tempo(y, sr)
+        return _empty_pattern(), 90.0
 
     onset_times = librosa.frames_to_time(onset_frames, sr=sr)
     tempo = _safe_tempo(y, sr)
