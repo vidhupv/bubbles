@@ -1,21 +1,18 @@
 /**
- * Instrument factory.
+ * Instrument set: melody + chord voices (each swappable) + drums.
  *
- * MVP placeholder voices — Day 10 will swap these for real CC-licensed
- * samples behind the same `Instruments` shape.
+ * Default voices:
+ *   - melody: piano (Tone.Sampler with CDN samples)
+ *   - chord pad: acoustic guitar (Tone.Sampler with CDN samples)
+ *   - drums: built-in Tone synths (rock kit)
  *
- * Voice choices:
- *   - melody:  Tone.PluckSynth — Karplus-Strong physical-modeling pluck.
- *              Closer to an acoustic guitar than a triangle-wave PolySynth.
- *   - chordPad: Tone.PolySynth(FMSynth) — soft sustained pad, separated
- *              from the melody so chord and lead don't blur into each other.
- *   - kick / snare / hat: standard Tone synth drums.
- *
- * Tone.start() must be called from a user gesture before any of these make
- * sound. The component layer is responsible for that.
+ * Each layer can be swapped to a different instrument via `setMelodyVoice` /
+ * `setChordVoice`. Swap is async — first use of a new instrument downloads
+ * its samples (~10 small MP3s).
  */
 
 import * as Tone from "tone";
+import { makeVoice, type InstrumentId, type Voice } from "./instruments";
 
 export interface Drums {
   kick: Tone.MembraneSynth;
@@ -25,37 +22,28 @@ export interface Drums {
 }
 
 export interface Instruments {
-  /** Lead voice. Plays the user's hummed melody. */
-  melody: Tone.PluckSynth;
-  /** Soft pad layer for chord_progression. Separate voice so it doesn't
-   *  collide with the melody. */
-  chordPad: Tone.PolySynth;
+  melody: Voice;
+  chordPad: Voice;
   drums: Drums;
   master: Tone.Gain;
+  melodyId: InstrumentId;
+  chordId: InstrumentId;
+  setMelodyVoice(id: InstrumentId): Promise<void>;
+  setChordVoice(id: InstrumentId): Promise<void>;
   dispose(): void;
 }
+
+export const DEFAULT_MELODY_INSTRUMENT: InstrumentId = "piano";
+export const DEFAULT_CHORD_INSTRUMENT: InstrumentId = "acoustic-guitar";
 
 export function loadInstruments(): Instruments {
   const master = new Tone.Gain(0.85).toDestination();
 
-  // PluckSynth is monophonic and gives one bright pluck per triggerAttackRelease.
-  // For a chord (multiple notes), the caller has to fire each note separately.
-  const melody = new Tone.PluckSynth({
-    attackNoise: 0.7,
-    dampening: 4000,
-    resonance: 0.92,
-  }).connect(master);
-  melody.volume.value = -4;
+  let melody = makeVoice(DEFAULT_MELODY_INSTRUMENT);
+  melody.connect(master);
 
-  const chordPad = new Tone.PolySynth(Tone.FMSynth, {
-    harmonicity: 1.2,
-    modulationIndex: 2.5,
-    oscillator: { type: "sine" },
-    envelope: { attack: 0.18, decay: 0.4, sustain: 0.6, release: 1.4 },
-    modulation: { type: "triangle" },
-    modulationEnvelope: { attack: 0.2, decay: 0.4, sustain: 0.3, release: 1.0 },
-  }).connect(master);
-  chordPad.volume.value = -16;
+  let chordPad = makeVoice(DEFAULT_CHORD_INSTRUMENT);
+  chordPad.connect(master);
 
   const kick = new Tone.MembraneSynth({
     pitchDecay: 0.04,
@@ -89,11 +77,48 @@ export function loadInstruments(): Instruments {
     },
   };
 
-  return {
-    melody,
-    chordPad,
+  const state: Instruments = {
+    get melody() {
+      return melody;
+    },
+    get chordPad() {
+      return chordPad;
+    },
     drums,
     master,
+    melodyId: DEFAULT_MELODY_INSTRUMENT,
+    chordId: DEFAULT_CHORD_INSTRUMENT,
+
+    async setMelodyVoice(id: InstrumentId) {
+      if (id === state.melodyId) return;
+      const next = makeVoice(id);
+      next.connect(master);
+      try {
+        await next.ready();
+      } catch (err) {
+        next.dispose();
+        throw err;
+      }
+      melody.dispose();
+      melody = next;
+      state.melodyId = id;
+    },
+
+    async setChordVoice(id: InstrumentId) {
+      if (id === state.chordId) return;
+      const next = makeVoice(id);
+      next.connect(master);
+      try {
+        await next.ready();
+      } catch (err) {
+        next.dispose();
+        throw err;
+      }
+      chordPad.dispose();
+      chordPad = next;
+      state.chordId = id;
+    },
+
     dispose() {
       melody.dispose();
       chordPad.dispose();
@@ -101,6 +126,8 @@ export function loadInstruments(): Instruments {
       master.dispose();
     },
   };
+
+  return state;
 }
 
 export async function unlockAudio(): Promise<void> {

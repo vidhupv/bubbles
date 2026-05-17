@@ -5,8 +5,13 @@
  * of the app can trust their shape.
  */
 
-import type { Arrangement, Note } from "@shared/types";
-import { ArrangementSchema, PitchResultSchema } from "./audio/validate";
+import type { Arrangement, Drums, Note } from "@shared/types";
+import {
+  ArrangementSchema,
+  DrumsSchema,
+  PitchResultSchema,
+} from "./audio/validate";
+import { z } from "zod";
 
 export class ApiError extends Error {
   constructor(public readonly status: number, message: string) {
@@ -42,6 +47,22 @@ export async function arrangeFromHum(audio: Blob): Promise<Arrangement> {
   const r = await fetch("/api/arrange-from-hum", { method: "POST", body: form });
   if (!r.ok) await readError(r);
   return ArrangementSchema.parse(await r.json());
+}
+
+const DrumsFromHumResponseSchema = z.object({
+  drums: DrumsSchema,
+  tempo: z.number().positive(),
+});
+
+/** POST /drums-from-hum — beatbox into the mic, get a drum pattern. */
+export async function drumsFromHum(
+  audio: Blob,
+): Promise<{ drums: Drums; tempo: number }> {
+  const form = new FormData();
+  form.append("audio", audio, "drums.webm");
+  const r = await fetch("/api/drums-from-hum", { method: "POST", body: form });
+  if (!r.ok) await readError(r);
+  return DrumsFromHumResponseSchema.parse(await r.json());
 }
 
 /** POST /arrange — refine an Arrangement using a free-form intent (Claude call). */

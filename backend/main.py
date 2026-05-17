@@ -19,8 +19,9 @@ from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 
 from app.arrange import agent_refine, build_melody_only_arrangement
+from app.drums import detect_drum_pattern_from_bytes
 from app.pitch import detect_pitch_from_bytes
-from app.schemas import Arrangement, Note, PitchResult
+from app.schemas import Arrangement, Drums, Note, PitchResult
 
 logging.basicConfig(
     level=logging.INFO,
@@ -104,6 +105,40 @@ class ArrangeRequest(BaseModel):
     intent: str
     prior: Arrangement | None = None
     bpm_hint: float | None = None
+
+
+class DrumsFromHumResponse(BaseModel):
+    drums: Drums
+    tempo: float
+
+
+@app.post("/drums-from-hum", response_model=DrumsFromHumResponse)
+async def drums_from_hum(audio: UploadFile = File(...)) -> DrumsFromHumResponse:
+    """Beatbox / tap into the mic → drum pattern (kick / snare / hat).
+
+    No Claude call. Pure librosa onset detection + spectral classification.
+    """
+    audio_bytes = await audio.read()
+    suffix = _read_audio(audio, audio_bytes)
+    try:
+        pattern, tempo = detect_drum_pattern_from_bytes(audio_bytes, suffix=suffix)
+    except Exception as exc:
+        log.exception("Drum detection failed")
+        raise HTTPException(
+            status_code=500,
+            detail=f"Drum detection failed: {exc.__class__.__name__}",
+        ) from exc
+
+    has_any_hit = any(
+        ch != "." for ch in pattern.kick + pattern.snare + pattern.hat
+    )
+    if not has_any_hit:
+        raise HTTPException(
+            status_code=422,
+            detail="No drum hits detected. Try tapping more clearly.",
+        )
+
+    return DrumsFromHumResponse(drums=Drums(kit="rock", pattern=pattern), tempo=tempo)
 
 
 @app.post("/arrange", response_model=Arrangement)

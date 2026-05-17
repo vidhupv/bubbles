@@ -147,17 +147,8 @@ function fire(instr: Instruments, ev: PlannedEvent, time: number): void {
       instr.drums.hat.triggerAttackRelease("C5", ev.duration, time, ev.velocity);
       return;
     case "melody": {
-      // PluckSynth is monophonic — fire each note individually. Hummed
-      // melodies are monophonic anyway, but the loop handles chord-like
-      // inputs cleanly.
-      for (const midi of ev.notes) {
-        instr.melody.triggerAttackRelease(
-          midiToNoteName(midi),
-          ev.duration,
-          time,
-          ev.velocity,
-        );
-      }
+      const names = ev.notes.map(midiToNoteName);
+      instr.melody.triggerAttackRelease(names, ev.duration, time, ev.velocity);
       return;
     }
     case "chord-pad": {

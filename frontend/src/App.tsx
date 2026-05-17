@@ -4,18 +4,23 @@
  * Flow:
  *   1. Press + hold blob → hum → release.
  *   2. Backend pitch-detects and returns a melody-only Arrangement.
- *   3. Frontend plays the hum back on a Karplus-Strong pluck (placeholder
- *      for real guitar samples).
- *   4. Layers panel lets you + chords / + drums / regenerate / remove.
- *   5. Voice mic + vibe presets refine whatever exists.
- *   6. Stop button halts playback; replay restarts.
- *   7. Bottom-right export.wav downloads a 60s WAV.
+ *   3. Frontend plays the hum back on piano (default).
+ *   4. Layers panel: + add chords, + add drums (AI), ◉ hum drums (yourself).
+ *   5. Per-layer instrument picker (piano, acoustic guitar, electric guitar…).
+ *   6. Voice mic for free-form refinement intents.
  */
 import { useCallback, useEffect, useRef, useState } from "react";
-import type { Arrangement } from "@shared/types";
-import { ApiError, arrangeFromHum, refineArrangement } from "./api";
+import type { Arrangement, Drums as DrumsType } from "@shared/types";
+import { ApiError, arrangeFromHum, drumsFromHum, refineArrangement } from "./api";
+import type { InstrumentId } from "./audio/instruments";
 import { play, type PlaybackHandle } from "./audio/renderer";
-import { loadInstruments, unlockAudio, type Instruments } from "./audio/sampler";
+import {
+  DEFAULT_CHORD_INSTRUMENT,
+  DEFAULT_MELODY_INSTRUMENT,
+  loadInstruments,
+  unlockAudio,
+  type Instruments,
+} from "./audio/sampler";
 import { ExportLink } from "./components/ExportLink";
 import { HumButton, type HumButtonState } from "./components/HumButton";
 import { Layers } from "./components/Layers";
@@ -23,8 +28,8 @@ import { MobileFallback } from "./components/MobileFallback";
 import { NotesDebug } from "./components/NotesDebug";
 import { PlaybackControls } from "./components/PlaybackControls";
 import { RationaleChat } from "./components/RationaleChat";
-import { VibePresets } from "./components/VibePresets";
 import { VoiceMic } from "./components/VoiceMic";
+import { useHumDrums } from "./hooks/useHumDrums";
 import { useHumRecorder } from "./hooks/useHumRecorder";
 import { useVoiceCommand } from "./hooks/useVoiceCommand";
 
@@ -34,6 +39,7 @@ const IDLE_COPY = "Press and hold. Hum any melody.";
 const REC_COPY = "Listening…";
 const PROC_COPY_INITIAL = "Hearing your hum.";
 const PROC_COPY_REFINE = "Bubbles is thinking.";
+const PROC_COPY_DRUMS = "Reading your drums.";
 const DENIED_COPY = "Mic blocked — click to retry.";
 const STOPPED_COPY = "Stopped. Replay or hum again.";
 
@@ -42,6 +48,7 @@ type Phase =
   | "recording"
   | "processing-initial"
   | "processing-refine"
+  | "processing-drums"
   | "playing"
   | "stopped"
   | "denied";
@@ -52,7 +59,17 @@ export function App() {
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
   const [isMobile, setIsMobile] = useState(false);
 
+  const [melodyInstrument, setMelodyInstrument] = useState<InstrumentId>(
+    DEFAULT_MELODY_INSTRUMENT,
+  );
+  const [chordInstrument, setChordInstrument] = useState<InstrumentId>(
+    DEFAULT_CHORD_INSTRUMENT,
+  );
+  const [melodyLoading, setMelodyLoading] = useState(false);
+  const [chordLoading, setChordLoading] = useState(false);
+
   const recorder = useHumRecorder();
+  const drumRecorder = useHumDrums();
   const voice = useVoiceCommand();
   const instrumentsRef = useRef<Instruments | null>(null);
   const playbackRef = useRef<PlaybackHandle | null>(null);
@@ -77,14 +94,25 @@ export function App() {
     if (recorder.state === "denied") setPhase("denied");
   }, [recorder.state]);
 
-  const renderArrangement = useCallback(async (arr: Arrangement) => {
+  const ensureInstruments = useCallback(async (): Promise<Instruments> => {
     await unlockAudio();
     if (!instrumentsRef.current) {
       instrumentsRef.current = loadInstruments();
+      // Kick off sample preload for default melody (piano)
+      void instrumentsRef.current.melody.ready().catch(() => undefined);
+      void instrumentsRef.current.chordPad.ready().catch(() => undefined);
     }
-    playbackRef.current?.stop();
-    playbackRef.current = play(arr, instrumentsRef.current);
+    return instrumentsRef.current;
   }, []);
+
+  const renderArrangement = useCallback(
+    async (arr: Arrangement) => {
+      const instr = await ensureInstruments();
+      playbackRef.current?.stop();
+      playbackRef.current = play(arr, instr);
+    },
+    [ensureInstruments],
+  );
 
   const stopPlayback = useCallback(() => {
     playbackRef.current?.stop();
@@ -99,9 +127,8 @@ export function App() {
   }, [arrangement, renderArrangement]);
 
   const handlePressDown = useCallback(async () => {
-    if (phase === "processing-initial" || phase === "processing-refine") return;
+    if (phase.startsWith("processing")) return;
     setErrorMsg(null);
-    // Implicit stop — pressing the blob always starts fresh.
     if (playbackRef.current) {
       playbackRef.current.stop();
       playbackRef.current = null;
@@ -161,7 +188,6 @@ export function App() {
     [arrangement, renderArrangement],
   );
 
-  // Client-side layer removal — no Claude call needed.
   const removeChords = useCallback(async () => {
     if (!arrangement) return;
     const next: Arrangement = {
@@ -182,6 +208,33 @@ export function App() {
     setPhase("playing");
   }, [arrangement, renderArrangement]);
 
+  const handleHumDrumsPressDown = useCallback(async () => {
+    if (!arrangement) return;
+    setErrorMsg(null);
+    try {
+      await drumRecorder.start();
+    } catch {
+      /* error mirrored */
+    }
+  }, [arrangement, drumRecorder]);
+
+  const handleHumDrumsPressUp = useCallback(async () => {
+    if (!arrangement) return;
+    const blob = await drumRecorder.stop();
+    if (!blob) return;
+    setPhase("processing-drums");
+    try {
+      const { drums } = await drumsFromHum(blob);
+      const next: Arrangement = { ...arrangement, drums: drums as DrumsType };
+      setArrangement(next);
+      await renderArrangement(next);
+      setPhase("playing");
+    } catch (err) {
+      setPhase("playing");
+      setErrorMsg(humanizeError(err));
+    }
+  }, [arrangement, drumRecorder, renderArrangement]);
+
   const handleVoicePressDown = useCallback(() => {
     if (!voice.supported || phase.startsWith("processing")) return;
     voice.start();
@@ -195,6 +248,48 @@ export function App() {
     }
   }, [voice, refine]);
 
+  const handleMelodyInstrumentChange = useCallback(
+    async (id: InstrumentId) => {
+      const instr = await ensureInstruments();
+      setMelodyLoading(true);
+      setMelodyInstrument(id);
+      try {
+        await instr.setMelodyVoice(id);
+        if (arrangement && playbackRef.current) {
+          await renderArrangement(arrangement);
+          setPhase("playing");
+        }
+      } catch (err) {
+        setErrorMsg(`Couldn't load ${id} — try again.`);
+        setMelodyInstrument(instr.melodyId);
+      } finally {
+        setMelodyLoading(false);
+      }
+    },
+    [arrangement, ensureInstruments, renderArrangement],
+  );
+
+  const handleChordInstrumentChange = useCallback(
+    async (id: InstrumentId) => {
+      const instr = await ensureInstruments();
+      setChordLoading(true);
+      setChordInstrument(id);
+      try {
+        await instr.setChordVoice(id);
+        if (arrangement && playbackRef.current) {
+          await renderArrangement(arrangement);
+          setPhase("playing");
+        }
+      } catch (err) {
+        setErrorMsg(`Couldn't load ${id} — try again.`);
+        setChordInstrument(instr.chordId);
+      } finally {
+        setChordLoading(false);
+      }
+    },
+    [arrangement, ensureInstruments, renderArrangement],
+  );
+
   if (isMobile) return <MobileFallback />;
 
   const humState: HumButtonState =
@@ -202,7 +297,7 @@ export function App() {
       ? "denied"
       : phase === "recording"
         ? "recording"
-        : phase === "processing-initial" || phase === "processing-refine"
+        : phase.startsWith("processing")
           ? "processing"
           : phase === "playing"
             ? "playing"
@@ -217,21 +312,21 @@ export function App() {
           ? PROC_COPY_INITIAL
           : phase === "processing-refine"
             ? PROC_COPY_REFINE
-            : phase === "denied"
-              ? DENIED_COPY
-              : phase === "stopped"
-                ? STOPPED_COPY
-                : IDLE_COPY;
+            : phase === "processing-drums"
+              ? PROC_COPY_DRUMS
+              : phase === "denied"
+                ? DENIED_COPY
+                : phase === "stopped"
+                  ? STOPPED_COPY
+                  : IDLE_COPY;
 
   const hasArrangement = arrangement !== null;
-  const processing =
-    phase === "processing-initial" || phase === "processing-refine";
+  const processing = phase.startsWith("processing");
 
   return (
     <>
       <div className="brand">bubbles</div>
       <main className={`stage ${hasArrangement ? "has-arrangement" : ""}`}>
-        <span />
         <HumButton
           state={humState}
           level={recorder.level}
@@ -259,15 +354,22 @@ export function App() {
             <Layers
               arrangement={arrangement!}
               disabled={processing}
+              melodyInstrument={melodyInstrument}
+              chordInstrument={chordInstrument}
+              melodyLoading={melodyLoading}
+              chordLoading={chordLoading}
+              drumsRecording={drumRecorder.recording}
+              onMelodyInstrumentChange={handleMelodyInstrumentChange}
+              onChordInstrumentChange={handleChordInstrumentChange}
               onRegenerateChords={() => refine("regenerate the chords")}
               onRemoveChords={removeChords}
               onAddChords={() => refine("add chords")}
               onRegenerateDrums={() => refine("regenerate the drums")}
               onRemoveDrums={removeDrums}
               onAddDrums={() => refine("add drums")}
+              onHumDrumsPressDown={handleHumDrumsPressDown}
+              onHumDrumsPressUp={handleHumDrumsPressUp}
             />
-
-            <VibePresets disabled={processing} onPick={refine} />
 
             <VoiceMic
               listening={voice.listening}
@@ -289,7 +391,7 @@ export function App() {
             />
 
             <p className="placeholder-note">
-              <em>Sound is a placeholder pluck synth. Real guitar samples land in v1.1.</em>
+              <em>Drum sounds are still synth placeholders. Real drum samples land in v1.1.</em>
             </p>
           </div>
         )}
@@ -301,7 +403,7 @@ export function App() {
 
 function humanizeError(err: unknown): string {
   if (err instanceof ApiError) {
-    if (err.status === 422) return "I couldn't pick up a clear melody — try humming a steady pitch.";
+    if (err.status === 422) return "I couldn't pick that up — try humming more clearly.";
     if (err.status === 413) return "That hum was too long — try under 30 seconds.";
     return err.message;
   }
